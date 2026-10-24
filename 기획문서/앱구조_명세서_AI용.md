@@ -745,16 +745,24 @@ sequenceDiagram
 
 ## 8. 구현 순서 (마일스톤)
 
-| 단계 | 기간(목표) | 산출물 | 완료 확인 |
-| --- | --- | --- | --- |
-| M0 | 10/24–10/27 | Pleos 가입·프로젝트, 공공 API 키, 저장소 생성, Gradle 뼈대(모든 모듈 빈 껍데기) | `./gradlew build` 성공 |
-| M1 | 10/27–10/31 | `core:model/port/config`, `ChargeSessionMachine` + 전이표 T1–T20 단위 테스트 | 테스트 20개 통과 |
-| M2 | 10/28–11/04 | 서버: `/v1/events`, `/status`, `compute_verdict` + 테스트, 공공 API 동기화(픽스처로 먼저) | pytest 통과, Docker 기동 |
-| M3 | 10/31–11/07 | `adapter:fake` + `ScenarioPlayer` + `DevMenuScreen`, `SessionCoordinator` | 시나리오 6개가 에뮬레이터에서 재생 |
-| M4 | 11/03–11/09 | UI: Home, ChargingScreen, AskSheet, WarningCard, Consent | 스크린샷 |
-| M5 | 11/05–11/11 | `adapter:pleos`(SOC, NaviHelper) 에뮬레이터 연동, Virtual Console로 SOC 변경 확인 | real flavor에서 LIVE 성공 기록 |
-| M6 | 11/10–11/14 | 시뮬레이터 + 시연 영상, GitHub README, `apk/팀명_ChargeCheck_release.apk` | 1차 제출 |
-| M7 | 11/16–12/02 | F3 대체 충전소, F4, 실패 재시도, 안정화 | 2차 PT용 동작 앱 |
+**진행 순서 (2026-10-24 확정): M0 → M1 → M3 → M5 → M2 → M4 → M6 → M7**
+
+- 가장 불확실한 Pleos SDK 연결(M5)을 먼저 확인하고, 그 결과로 서버(M2) 데이터를 정한 뒤, 데이터가 굳은 다음 화면(M4)을 한 번에 만든다. UI를 먼저 만들면 데이터가 바뀔 때마다 화면을 다시 고치게 되기 때문이다.
+- M5·M2는 마감일까지 안 되면 가짜 데이터·가짜 서버로 넘어가 M4를 시작한다(1차 시연은 demo flavor로도 가능).
+- 10/28 설명회에서 "차량 앱의 외부 서버 통신 제약"을 확인한 뒤 M2를 시작한다.
+- 차량이 없으므로 M5는 Pleos Connect Emulator + Virtual Console(SOC 슬라이더, 기어)로 실제 SDK 연결을 검증한다.
+- 접수양식(기획서, 필수 제출물)은 순서와 별개로 11/10까지 병행한다.
+
+| 순서 | 단계 | 기간(목표) | 산출물 | 완료 확인 | 상태 |
+| --- | --- | --- | --- | --- | --- |
+| 1 | M0 | 10/24 | Pleos 가입·프로젝트, 공공 API 키, 저장소 생성, Gradle 뼈대(모든 모듈 빈 껍데기) | `./gradlew build` 성공 | ✅ |
+| 2 | M1 | 10/24 | `core:model/port/config`, `ChargeSessionMachine` + 전이표 T1–T22 단위 테스트 | 테스트 39개 통과 | ✅ |
+| 3 | M3 | ~10/27 | `adapter:fake` + `ScenarioPlayer` + `DevMenuScreen`, `SessionCoordinator` | 시나리오 6개가 에뮬레이터에서 재생 | 🔶 2/6 (live_success, live_fail 에뮬레이터 확인) |
+| 4 | M5 | 10/27–11/01 | `adapter:pleos`(SOC, NaviHelper) 에뮬레이터 연동, Virtual Console로 SOC 변경 확인 | real flavor에서 LIVE 성공 기록 | ⏳ |
+| 5 | M2 | 11/01–11/06 | 서버: `/v1/events`, `/status`, `compute_verdict` + 테스트, 공공 API 동기화(픽스처로 먼저) | pytest 통과, Docker 기동 | ⏳ |
+| 6 | M4 | 11/06–11/12 | UI: Home, ChargingScreen, AskSheet, WarningCard, Consent | 스크린샷 | ⏳ |
+| 7 | M6 | 11/12–11/14 | 시뮬레이터 + 시연 영상, GitHub README, `apk/팀명_ChargeCheck_release.apk` | 1차 제출(마감 11/15) | ⏳ |
+| 8 | M7 | 11/16–12/02 | F3 대체 충전소, F4, 실패 재시도, 안정화 | 2차 PT용 동작 앱 | ⏳ |
 
 ---
 
