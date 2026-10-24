@@ -33,7 +33,7 @@ data class ChargerPick(val eventId: String, val stationName: String, val charger
 
 /**
  * 포트의 Flow를 [SessionInput]으로 바꿔 [ChargeSessionMachine.reduce]에 넣고, 나온 [Effect]를 실행한다.
- * 상태는 [state]로 UI에 노출한다. (기획문서/앱구조_명세서_AI용.md §4.7 끝)
+ * 상태는 [state]로 UI에 노출한다. (문서/앱구조_명세서_AI용.md §4.7 끝)
  *
  * @param resolveStation 내비 목적지가 충전소인지 판별한다. §4.8 StationResolver가 생기기 전까지의 자리.
  */

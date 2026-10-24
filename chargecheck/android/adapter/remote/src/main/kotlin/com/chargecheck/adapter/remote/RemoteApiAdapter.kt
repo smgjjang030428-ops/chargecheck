@@ -28,7 +28,7 @@ import java.net.URLEncoder
 import java.time.Instant
 
 /**
- * ChargeCheck 서버 REST API (기획문서/앱구조_명세서_AI용.md §5.2).
+ * ChargeCheck 서버 REST API (문서/앱구조_명세서_AI용.md §5.2).
  * 의존성을 늘리지 않으려고 HttpURLConnection + org.json(안드로이드 내장)으로 썼다.
  *
  * @param baseUrl 에뮬레이터에서 개발 PC의 서버는 "http://10.0.2.2:8000".
