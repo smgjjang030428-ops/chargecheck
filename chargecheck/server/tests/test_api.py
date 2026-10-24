@@ -107,6 +107,15 @@ def test_대체_충전소는_빨강을_빼고_초록_먼저(client):
     assert ids[0] == "ME000008" and "ME000004" not in ids and len(ids) <= 3
 
 
+def test_버스전용_충전기는_대수와_지도에서_빠진다(client, seeded):
+    from app.jobs.public_sync import upsert_charger_info
+    bus = {"statNm": "버스 차고지", "statId": "BUS001", "chgerId": "01", "chgerType": "11", "lat": "37.4985", "lng": "127.0280", "stat": "2", "statUpdDt": "20261024120000"}
+    with seeded() as s:
+        upsert_charger_info(s, [bus])
+    ids = [x["stationId"] for x in client.get("/v1/stations/nearby", params={"lat": 37.4979, "lon": 127.0276, "radius": 500}).json()]
+    assert "BUS001" not in ids and "ME000001" in ids
+
+
 def test_없는_충전소는_404(client):
     assert client.get("/v1/stations/NOPE/status").status_code == 404
 

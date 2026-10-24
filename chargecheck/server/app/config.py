@@ -26,20 +26,25 @@ LOOKBACK_H = 24
 DEDUP_WINDOW_H = 2
 MAX_FAILS_PER_DEVICE_PER_DAY = 10
 
-# 공공 API stat 코드 → 상태. ⚠️ 활용가이드 문서로 최종 확인 필요(명세 §5.5). 이 표만 고치면 된다.
+# 공공 API stat 코드 → 상태. 출처: 한국환경공단_전기자동차 충전소 정보_OpenAPI활용가이드 v1.25 §3.2 (2026-10-24 확인)
 PUBLIC_STAT_MAP = {
+    "0": "UNKNOWN",         # 알수없음
     "1": "UNKNOWN",         # 통신이상
     "2": "AVAILABLE",       # 충전대기
     "3": "CHARGING",        # 충전중
     "4": "OUT_OF_SERVICE",  # 운영중지
     "5": "OUT_OF_SERVICE",  # 점검중
+    "6": "CHARGING",        # 예약중(지금은 쓸 수 없으므로 사용 중과 같게 본다)
     "9": "UNKNOWN",         # 상태미확인
 }
 
-# 공공 API chgerType 코드 중 완속. 나머지는 급속으로 본다. ⚠️ 활용가이드로 최종 확인 필요.
+# 공공 API chgerType 코드 중 완속. 나머지는 급속으로 본다.
 SLOW_CHARGER_TYPES = {"02", "08"}
 
-# 공공 API chgerType 코드 → 커넥터 방식. ⚠️ 활용가이드로 최종 확인 필요(이 표만 고치면 된다).
+# 승용차가 쓸 수 없는 충전기(버스전용). 판정·대수·지도에서 뺀다. 서울에 922대(2026-10-24).
+BUS_ONLY_TYPES = {"11"}
+
+# 공공 API chgerType 코드 → 커넥터 방식. 출처: 같은 활용가이드 §3.3 (2026-10-24 확인)
 CONNECTOR_MAP = {
     "01": ["DC차데모"],
     "02": ["AC완속"],
@@ -51,4 +56,5 @@ CONNECTOR_MAP = {
     "08": ["DC콤보(완속)"],
     "09": ["NACS"],
     "10": ["DC콤보", "NACS"],
+    "11": ["DC콤보2(버스전용)"],
 }

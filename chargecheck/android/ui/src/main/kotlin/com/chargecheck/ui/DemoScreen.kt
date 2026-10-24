@@ -1,6 +1,8 @@
 package com.chargecheck.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -12,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -323,12 +326,15 @@ internal fun ChargerPickSheet(modifier: Modifier, pick: ChargerPick, onPick: (St
         Spacer(Modifier.height(8.dp))
         Text("충전기에 적힌 번호를 고르면 그 충전기만 실패로 기록돼요", color = TextSub, fontSize = 18.sp)
         Spacer(Modifier.height(20.dp))
-        pick.chargers.chunked(4).forEach { row ->
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(vertical = 6.dp)) {
-                row.forEach { c ->
-                    OutlinedButton(onClick = { onPick(c.chargerId) }, shape = RoundedCornerShape(14.dp)) {
-                        val kind = if (c.chargerType == ChargerType.SLOW) "완속" else "급속"
-                        Text("${c.chargerId}번 · $kind", color = TextMain, fontSize = 22.sp, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp))
+        // 아파트 충전소는 100대까지 있다(서울 실데이터). 목록이 길면 스크롤한다.
+        Column(Modifier.heightIn(max = 300.dp).verticalScroll(rememberScrollState()), horizontalAlignment = Alignment.CenterHorizontally) {
+            pick.chargers.chunked(4).forEach { row ->
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.padding(vertical = 6.dp)) {
+                    row.forEach { c ->
+                        OutlinedButton(onClick = { onPick(c.chargerId) }, shape = RoundedCornerShape(14.dp)) {
+                            val kind = if (c.chargerType == ChargerType.SLOW) "완속" else "급속"
+                            Text("${c.chargerId}번 · $kind", color = TextMain, fontSize = 22.sp, modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp))
+                        }
                     }
                 }
             }

@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.config import CONNECTOR_MAP, LOOKBACK_H
+from app.config import BUS_ONLY_TYPES, CONNECTOR_MAP, LOOKBACK_H
 from app.models import ChargeEvent, Charger, Review, Station
 from app.schemas import ChargerStatusOut, StationOut, StationStatusOut
 from app.services.verdict import ChargerIn, EventIn, compute_verdict
@@ -38,7 +38,10 @@ def station_out(s: Station) -> StationOut:
 
 def station_status(session: Session, stat_id: str, now: datetime | None = None) -> StationStatusOut:
     now = now or utcnow()
-    chargers = session.scalars(select(Charger).where(Charger.stat_id == stat_id).order_by(Charger.chger_id)).all()
+    chargers = [
+        c for c in session.scalars(select(Charger).where(Charger.stat_id == stat_id).order_by(Charger.chger_id)).all()
+        if c.chger_type not in BUS_ONLY_TYPES
+    ]
     events = session.scalars(
         select(ChargeEvent).where(
             ChargeEvent.stat_id == stat_id,

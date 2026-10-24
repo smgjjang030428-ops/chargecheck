@@ -744,10 +744,12 @@ g. else                                             → GRAY,   NO_RECENT_DATA
 
 | 작업 | 주기 | 호출 | 비고 |
 | --- | --- | --- | --- |
-| 충전소·충전기 목록 전체 | 매일 04:00 | `getChargerInfo` | ⚠️ UNVERIFIED: 엔드포인트명·필드 확인 필요 |
+| 충전소·충전기 목록 전체 | 매일 04:00 | `getChargerInfo` | ✅ 2026-10-24 서울 실데이터로 확인(12,916곳·75,470대) |
 | 상태 변경분 | 5분마다 | `GET https://apis.data.go.kr/B552584/EvCharger/getChargerStatus?serviceKey=...&period=5&dataType=JSON` | `stat`, `statUpdDt` 확인됨 |
 
-- 상태 코드(`stat`) 값의 의미는 활용가이드 문서로 확정한다. ⚠️ UNVERIFIED. 확정 전에는 `config.py`의 `PUBLIC_STAT_MAP`(코드→AVAILABLE/CHARGING/OUT_OF_SERVICE/UNKNOWN)만 고치면 되게 한다.
+- 상태 코드(`stat`)·충전기 타입(`chgerType`)은 「OpenAPI활용가이드 v1.25」 §3.2·§3.3으로 확정했다(2026-10-24). stat: 0 알수없음, 1 통신이상, 2 충전대기, 3 충전중, 4 운영중지, 5 점검중, 6 예약중, 9 상태미확인. chgerType: 01 DC차데모 … 10 DC콤보+NACS, 11 DC콤보2(버스전용). 결제 수단 필드는 없다. 표는 `config.py`의 `PUBLIC_STAT_MAP`·`CONNECTOR_MAP`.
+- 실데이터에서 찾은 처리: 버스전용(11) 충전기는 판정·지도에서 제외(서울 922대), 좌표가 자리표시값((33.0,125.0)·(37.5,127.0) 등)인 충전소는 저장하지 않음(21곳), 아파트 충전소는 한 곳에 100대까지 있음(충전기 선택 목록은 스크롤).
+- 서울 실데이터 분포(2026-10-24): 충전대기 55,589 · 충전중 15,232 · 상태미확인 3,599 · 통신이상 695 · 점검중 309 · 운영중지 46. 완속(02) 69,399대, 출력 7kW 51,715대·3kW 15,793대.
 - 호출 실패 시 마지막 값을 유지하고 `stat_upd_dt`로 신선도를 판단한다.
 
 ---
@@ -848,7 +850,7 @@ sequenceDiagram
 | 실제 주행 시 `onDestinationArrived` 동작 | 도착 감지 | 에뮬레이터에서 재현 불가. 정차 + 반경(StoppedNearStation)으로 보완 |
 | 표준 AAOS `EV_CHARGE_STATE` 읽기 가능 여부 | 감지 속도 | 가능하면 `VehiclePort.chargeState()` 추가 |
 | Pleos 에뮬레이터에서 Android TTS/STT/Location 동작 | 음성·위치 | 버튼 UI, NaviHelper 위치 이벤트 |
-| 공공 API `stat` 코드 의미, `getChargerInfo` 필드 | 판정 | `PUBLIC_STAT_MAP` 한 곳만 수정 |
+| ~~공공 API `stat` 코드 의미, `getChargerInfo` 필드~~ | — | ✅ 활용가이드 v1.25 + 서울 실데이터로 확인 (§5.5) |
 | 차량 앱의 외부 서버 통신에 대한 Pleos 심사 제약 | 서버 구조 | 10/28 설명회에서 질문 |
 | 개인위치정보 관련 법적 절차(실서비스 시) | 사업화 | 좌표 미전송·해시 ID로 최소화, 법률 검토 |
 

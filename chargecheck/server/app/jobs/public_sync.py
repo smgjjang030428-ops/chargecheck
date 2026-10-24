@@ -16,6 +16,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import SLOW_CHARGER_TYPES, settings
@@ -23,6 +24,9 @@ from app.db import Base, SessionLocal, engine
 from app.models import Charger, Station
 
 log = logging.getLogger("public_sync")
+# httpx는 요청 URL을 INFO로 남기는데 URL에 serviceKey가 들어 있다. 키가 로그에 남지 않게 막는다.
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 KST = timezone(timedelta(hours=9))  # 한국은 서머타임이 없어 고정 오프셋으로 충분하다
 PAGE_SIZE = 9999
 
@@ -35,6 +39,14 @@ def parse_kst(value: str | None) -> datetime | None:
         return datetime.strptime(value[:14], "%Y%m%d%H%M%S").replace(tzinfo=KST).astimezone(timezone.utc)
     except ValueError:
         return None
+
+
+def plausible_coords(lat: float, lon: float) -> bool:
+    """한국 범위 밖이거나 (33.0, 125.0)·(37.5, 127.0)처럼 소수 첫째 자리까지만 있는 자리표시 좌표는 버린다.
+    실제 서울 데이터에서 확인한 문제(2026-10-24): 12,937곳 중 13곳."""
+    if not (33.0 <= lat <= 38.7 and 124.5 <= lon <= 132.0):
+        return False
+    return not (round(lat, 1) == lat and round(lon, 1) == lon)
 
 
 def _int_or_none(value) -> int | None:
@@ -66,7 +78,8 @@ def fetch_all(client: httpx.Client, operation: str, params: dict) -> list[dict]:
                 payload = r.json()
                 break
             except (httpx.HTTPError, ValueError) as e:
-                log.warning("%s 실패(%d회째): %s", operation, attempt + 1, e)
+                # 예외 문장에 URL(=키)이 섞일 수 있어 종류만 남긴다
+                log.warning("%s 실패(%d회째): %s", operation, attempt + 1, type(e).__name__)
                 time.sleep(2 * (attempt + 1))
         if payload is None:
             raise RuntimeError(f"{operation} 호출 실패")
@@ -81,6 +94,7 @@ def fetch_all(client: httpx.Client, operation: str, params: dict) -> list[dict]:
 def upsert_charger_info(session: Session, rows: list[dict]) -> tuple[int, int]:
     """getChargerInfo 행들을 충전소·충전기 테이블에 반영한다. 반환: (충전소 수, 충전기 수)."""
     now = datetime.now(timezone.utc)
+    skipped_coords = 0
     stations: dict[str, list[dict]] = {}
     for row in rows:
         if row.get("delYn") == "Y":
@@ -95,6 +109,14 @@ def upsert_charger_info(session: Session, rows: list[dict]) -> tuple[int, int]:
         try:
             lat, lon = float(first["lat"]), float(first["lng"])
         except (KeyError, TypeError, ValueError):
+            continue
+        if not plausible_coords(lat, lon):
+            skipped_coords += 1
+            # 예전에 저장된 같은 충전소가 있으면 지운다(지도에 엉뚱한 위치로 나오지 않게)
+            for old in session.scalars(select(Charger).where(Charger.stat_id == stat_id)).all():
+                session.delete(old)
+            if (old_station := session.get(Station, stat_id)) is not None:
+                session.delete(old_station)
             continue
         kinds = {("SLOW" if c.get("chgerType") in SLOW_CHARGER_TYPES else "FAST") for c in chargers}
         station = session.get(Station, stat_id) or Station(stat_id=stat_id)
@@ -117,7 +139,9 @@ def upsert_charger_info(session: Session, rows: list[dict]) -> tuple[int, int]:
             charger.stat_upd_dt = parse_kst(c.get("statUpdDt"))
             session.merge(charger)
     session.commit()
-    return len(stations), sum(len(v) for v in stations.values())
+    if skipped_coords:
+        log.info("좌표가 자리표시값인 충전소 %d곳은 건너뜀", skipped_coords)
+    return len(stations) - skipped_coords, sum(len(v) for v in stations.values())
 
 
 def apply_status(session: Session, rows: list[dict]) -> int:

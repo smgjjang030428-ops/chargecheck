@@ -24,12 +24,18 @@ def _within(session: Session, lat: float, lon: float, radius_m: int) -> list[tup
 
 @router.get("/nearby", response_model=list[NearbyStationOut])
 def nearby(lat: float, lon: float, radius: int = Query(500, ge=50, le=10_000), session: Session = Depends(get_session)):
-    """주변 충전소(최대 30개, 거리순)와 판정. 지도 화면이 한 번에 그리도록 상태를 같이 준다."""
+    """주변 충전소(최대 60개, 거리순)와 판정. 지도 화면이 한 번에 그리도록 상태를 같이 준다.
+    승용차가 쓸 충전기가 없는 곳(버스전용만 있는 곳)은 뺀다."""
     now = utcnow()
-    return [
-        NearbyStationOut(**station_out(s).model_dump(), distance_m=d, status=station_status(session, s.stat_id, now))
-        for s, d in _within(session, lat, lon, radius)[:30]
-    ]
+    out = []
+    for s, d in _within(session, lat, lon, radius):
+        st = station_status(session, s.stat_id, now)
+        if not st.chargers:
+            continue
+        out.append(NearbyStationOut(**station_out(s).model_dump(), distance_m=d, status=st))
+        if len(out) == 60:
+            break
+    return out
 
 
 @router.get("/{station_id}/status", response_model=StationStatusOut)

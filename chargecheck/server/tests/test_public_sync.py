@@ -7,7 +7,7 @@ from app.models import Charger, Station
 
 def info_row(stat_id: str, chger_id: str, stat: str = "2", chger_type: str = "04", del_yn: str = "N") -> dict:
     return {"statNm": f"충전소 {stat_id}", "statId": stat_id, "chgerId": chger_id, "chgerType": chger_type, "addr": "서울",
-            "lat": "37.5", "lng": "127.0", "busiNm": "운영사", "stat": stat, "statUpdDt": "20261024120000", "delYn": del_yn}
+            "lat": "37.5012", "lng": "127.0396", "busiNm": "운영사", "stat": stat, "statUpdDt": "20261024120000", "delYn": del_yn}
 
 
 def page(items: list[dict], total: int) -> dict:
@@ -53,6 +53,15 @@ def test_삭제된_충전기는_지운다(seeded):
     with seeded() as s:
         public_sync.upsert_charger_info(s, [info_row("ME000001", "04", del_yn="Y")])
         assert s.get(Charger, ("ME000001", "04")) is None
+
+
+def test_자리표시_좌표는_건너뛴다(seeded):
+    bad = info_row("BAD1", "01") | {"lat": "33.0", "lng": "125.0"}
+    good = info_row("OK1", "01") | {"lat": "37.4979", "lng": "127.0276"}
+    with seeded() as s:
+        n_stations, _ = public_sync.upsert_charger_info(s, [bad, good])
+        assert n_stations == 1
+        assert s.get(Station, "BAD1") is None and s.get(Station, "OK1") is not None
 
 
 def test_KST_시각을_UTC로_바꾼다():

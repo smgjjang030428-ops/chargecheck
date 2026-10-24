@@ -130,7 +130,7 @@ private fun StationMap(stations: List<MapStation>, car: GeoPoint?, onSelect: (St
         MapView(context).apply {
             setTileSource(TileSourceFactory.MAPNIK)
             setMultiTouchControls(true)
-            controller.setZoom(15.0)
+            controller.setZoom(16.0)
         }
     }
     DisposableEffect(Unit) { onDispose { map.onDetach() } }
@@ -142,7 +142,7 @@ private fun StationMap(stations: List<MapStation>, car: GeoPoint?, onSelect: (St
             stations.forEach { s ->
                 view.overlays += Marker(view).apply {
                     position = OsmPoint(s.location.lat, s.location.lon)
-                    icon = dot(s.verdict.color().toArgb(), 44)
+                    icon = dot(s.verdict.color().toArgb(), 30)
                     setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                     title = s.name
                     setOnMarkerClickListener { _, _ -> onSelect(s.id); true }
