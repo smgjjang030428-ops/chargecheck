@@ -58,6 +58,17 @@ cd chargecheck/chargecheck/android
 
 Windows에서는 `./gradlew` 대신 `gradlew.bat`을 씁니다.
 
+### 서버 (real 빌드용)
+
+`real` 빌드는 충전소 목록·판정을 서버에서 받습니다. 개발 PC에서 서버를 켜면 에뮬레이터 앱이 `http://10.0.2.2:8000`으로 접속합니다. 자세한 내용은 [`chargecheck/server/README.md`](chargecheck/server/README.md).
+
+```bash
+cd chargecheck/server
+python -m venv .venv && .venv\Scripts\python -m pip install -r requirements.txt
+.venv\Scripts\python -m app.jobs.public_sync --fixture tests/fixtures/charger_info_gangnam.json   # 시연 데이터
+.venv\Scripts\python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
+```
+
 ### 빌드 종류 (flavor)
 
 | flavor | 용도 | 차량 데이터 |

@@ -241,6 +241,8 @@ interface NaviPort {
     /** 목적지·경유지 도착 */
     fun arrivals(): Flow<RouteTarget>
     suspend fun addWaypoint(target: RouteTarget): Result<Unit>
+    /** 기본 내비에 목적지를 넘겨 길안내 시작(지도 화면 [여기로 안내]). Pleos: NaviHelper.requestRoute */
+    suspend fun setDestination(target: RouteTarget): Result<Unit>
 }
 data class RouteTarget(val name: String, val location: GeoPoint, val poiId: String?)
 
@@ -461,9 +463,24 @@ sequenceDiagram
 | `AskSheet` | Asking/AskingRetro | ✕(주차 전용) | 질문 + [응, 안 돼요] [아직 연결 중] / 과거형 [응] [아니요] |
 | `ReviewSheet` | Ended + 주차 | ✕ | 태그 칩 6개, 건너뛰기 |
 | `DevMenuScreen` | demo flavor | ✕ | 시나리오 목록, 재생/정지, 시간 배속 |
+| `StationMapScreen` | real flavor, 주차 중 | ✕(주차 전용) | 주변 충전소 지도(우리 판정 색 핀), 핀 → 상세 카드 → [여기로 안내](`NaviPort.setDestination`) |
+| 충전소 상세 카드 | 핀 선택(주차 중) | ✕ | 판정 문장, **충전 타입**(급속 100kW 4대 · 완속 7kW 2대), **커넥터**(DC콤보 · AC완속), **실시간**(사용 가능 5 · 충전 중 1), 충전기별 줄(번호·종류·kW·커넥터·공공 상태·우리 실패 기록), **결제**, 이용(시간·주차 무료 여부·이용 제한) |
+
+- 결제 수단은 공공 API에 필드가 없다(2026-10-24 확인). 지어내지 않고 "공공 데이터에 결제 정보 없음 · 운영사 확인: {운영기관} {연락처}"로 안내한다. 서버 `StationOut.payment`는 확인된 정보가 생기면 채우는 자리(지금은 null).
+- 커넥터 방식은 공공 `chgerType` 코드를 서버 `CONNECTOR_MAP`으로 바꾼다. ⚠️ 코드표는 활용가이드로 최종 확인 필요.
 
 - 상태 색: GREEN=초록, YELLOW=노랑, RED=빨강, GRAY=회색. 다른 곳에 색을 쓰지 않는다.
 - 주행 제한은 `DrivingStatePort.isParked()`로 판단하고, 제한 중에는 키보드·긴 글·목록 스크롤을 숨긴다(Pleos 주행 규제 가이드).
+- **지도 + 기본 내비 혼합(2026-10-24 결정)**: 주차·출발 전에는 우리 지도에서 판정 색을 보고 충전소를 고르고, 길안내는 Pleos 기본 내비가 한다. 주행 중에는 기본 내비만 쓰고 우리 앱은 목적지를 받아 경고한다.
+- 지도 타일은 지금 osmdroid + OpenStreetMap(키·구글 서비스 불필요)이다. OSM 공용 타일은 개발·시연용이고, 출시 전에는 이용 허락된 상용 타일(카카오·네이버 등)로 바꾼다. 외부 지도 SDK 사용 가능 여부는 Pleos 심사 기준 확인 필요.
+- **주행 중 화면(2026-10-24 구현·에뮬레이터 확인)**
+  - DO(Distraction Optimization)를 선언하지 않은 앱은 주행 중 Pleos가 화면 전체를 "주행 중에는 사용할 수 없습니다"로 막는다(Pleos 「지역별 주행 규제 정책」: DO 미선언 시 Drive = 사용 불가).
+  - `MainActivity`에 `<meta-data android:name="distractionOptimized" android:value="true" />`를 넣으면 에뮬레이터에서 D 기어에도 우리 화면이 보인다(car_service `DO: true`, UxR 80 = NO_SETUP 64 + NO_VIDEO 16).
+  - 주행 여부는 기어가 아니라 Pleos 「주행 규제 개발 가이드」대로 `CarUxRestrictionsManager`(`isRequiresDistractionOptimization`)로 판단한다 → `adapter:android`의 `CarUxRestrictionsAdapter`(`useLibrary("android.car")`).
+  - 주행 중에는 `DrivingScreen`만 보인다: 한 번에 정보 하나(경고가 있으면 경고, 없으면 상태 한 줄), 버튼 최대 2개·높이 96dp·글자 28~40sp, 지도·목록·스크롤·애니메이션·키보드 없음, 긴 글은 한 줄로 자름. "충전이 안 되나요?" 질문은 주행 중 띄우지 않고 정차 후 AskSheet로 보인다.
+  - 주행 중 [바꾸기]를 누르면 `addWaypoint`가 실행되고 Pleos 내비가 앞으로 나와 새 경로를 안내한다(확인).
+  - 근거: Pleos 「앱 카테고리」에서 **Mobility Services** 카테고리는 주행 중 "전기차 충전소 찾기 및 경유지 설정"을 제한적으로 허용할 수 있다고 명시. 우리 Pleos 프로젝트 카테고리는 지금 "지도/내비게이션"이므로 **Mobility Services로 바꾸는 것을 검토**한다.
+  - ⚠️ 실제 출시 차량에서도 개발 빌드의 DO 선언이 그대로 인정되는지, 심사 조건이 무엇인지는 10/28 설명회에서 확인한다.
 
 ### 4.11 음성 (`VoicePort`)
 
@@ -503,40 +520,48 @@ sequenceDiagram
 
 | 포트 | real flavor 구현 | 사용하는 실제 API | demo flavor 구현 |
 | --- | --- | --- | --- |
-| VehiclePort | `PleosVehicleAdapter` | `Vehicle(context).initialize()`, `getEvBattery()` → `registerEvBatteryStateOfCharge`, `getEvBatteryStateOfCharge` | `FakeVehicle` |
-| DrivingStatePort | `CarUxRestrictionsAdapter` | Android `CarUxRestrictionsManager` | `FakeDrivingState` |
-| NaviPort | `PleosNaviAdapter` | `NaviHelper.initialize`, `NaviHelperEventListener.onDestinationChanged/onDestinationArrived/onWayPointArrived/onDestinationInfo`, `addWaypoint` | `FakeNavi` |
-| LocationPort | `AndroidLocationAdapter` (+ NaviHelper `onCurrentLocationInfo` 보조) | `LocationManager` | `FakeLocation` |
+| VehiclePort | `PleosVehicleAdapter` ✅ | `Vehicle(context).initialize()`, `getEvBattery()` → `registerEvBatteryStateOfCharge(EvBatteryStateOfChargeListener)`, `getEvBatteryStateOfCharge(onComplete, onFailed)` | `FakeVehicle` |
+| DrivingStatePort | `CarUxRestrictionsAdapter` ✅ | Android `CarUxRestrictionsManager.registerListener` → `isRequiresDistractionOptimization` (Pleos 주행 규제 개발 가이드) | `FakeDrivingState` |
+| NaviPort | `PleosNaviAdapter` ✅ | `NaviHelper.initialize(onSuccess, onError)`, 리스너 `onDestinationInfo/onWayPointInfo/onDestinationArrived/onWayPointArrived/onRouteStarted/onRoutingCompleted`, 요청 `getDestinationInfo/getWaypointInfo`, `requestRoute(RouteInfo)`, `addWaypoint(RequestWaypointInfo)` | `FakeNavi` |
+| LocationPort | `PleosNaviAdapter` ✅ (NaviHelper `onCurrentLocationInfo`) | `getCurrentLocationInfo()` | `FakeLocation` |
 | VoicePort | `AndroidVoiceAdapter` | `android.speech.tts.TextToSpeech`, `SpeechRecognizer` (ko-KR) | `FakeVoice`(시나리오의 답 사용) |
 | ChargeCheckApiPort | `RemoteApiAdapter` | Retrofit → §5 API | `RemoteApiAdapter`(시연용 서버) 또는 `FakeApi` |
 
-- `EvBattery`의 정확한 메서드 시그니처·콜백 형식은 로그인 후 API Reference에서 확인한다. ⚠️ UNVERIFIED
+- 2026-10-24 Pleos 에뮬레이터 + Virtual Console에서 확인한 사실 (Vehicle 2.3.2, NaviHelper 3.0.5):
+  - 권한: SOC는 `pleos.car.permission.CAR_ENERGY`, 기어는 `CAR_DRIVE`.
+  - Virtual Console(`adb forward tcp:8088 tcp:8088` → `http://127.0.0.1:8088/`)의 Battery SOC 슬라이더를 바꾸면 앱 리스너에 수 초 안에 `onEvBatteryStateOfChargeUpdated`가 온다. 등록 직후 현재 값도 한 번 온다.
+  - 목표 충전량을 **읽는** API는 없다(`setEvChargePercentLimit`·지원 범위 조회만 있음) → `chargeTargetPct()`는 null, real flavor에서 F5 충전 완료 알림은 아직 동작하지 않는다.
+  - 길안내가 없으면 `onDestinationInfo`가 이름 "" · 좌표 (0, 0)으로 온다(무시).
+  - 에뮬레이터에서는 안내 시작 때 `onDestinationChanged`가 오지 않고 `onRouteStarted`·`onRouteEnded` 등이 온다. 그래서 이 이벤트들과 10초 주기 조회로 목적지를 다시 읽는다.
+  - `requestRoute`로 넘긴 POI ID(`ME000007` 등)가 `onDestinationInfo.poiId`·경유지 `poiId`로 그대로 돌아온다 → 충전소 판별이 정확하다.
+  - 에뮬레이터 내비는 실제로 달리지 않으므로 도착 이벤트는 재현하지 못했다. debug 빌드의 "개발용: 목적지 도착 처리" 버튼으로 대신한다.
 - `getEvChargeSwitchState`는 사용하지 않는다. AAOS 표준의 `EV_CHARGE_SWITCH`는 "사용자가 요청한 충전 시작·중지 설정"이며 실제 충전 상태가 아니다.
 - 표준 AAOS `EV_CHARGE_STATE`·`EV_CHARGE_PORT_CONNECTED`를 일반 앱이 읽을 수 있다면 `VehiclePort`에 `chargeState()`를 추가해 정체 판정을 보강한다. ⚠️ UNVERIFIED
 - Pleos TTS/STT/FusedLocation SDK가 열리면 해당 어댑터만 교체한다.
 
 ### 4.15 시나리오 재생 (demo)
 
-`adapter/fake/src/main/assets/scenarios/*.json`
+시나리오는 `adapter/fake/.../ScenarioPlayer.kt`의 `DemoScenarios`에 Kotlin으로 정의한다(2026-10-24 구현. JSON 파일 방식은 시나리오를 앱 밖에서 바꿔야 할 때 다시 검토).
 
-```json
-{
-  "id": "live_fail_then_switch",
-  "title": "LIVE: 급속 충전기 고장 → 질문 → 실패 기록",
-  "station": { "id": "ME000001", "name": "○○ 급속충전소", "lat": 37.4979, "lon": 127.0276, "type": "FAST" },
-  "speed": 60,
-  "steps": [
-    { "t": 0,   "type": "route_target", "stationId": "ME000001" },
-    { "t": 30,  "type": "arrive" },
-    { "t": 30,  "type": "soc", "pct": 42 },
-    { "t": 30,  "type": "parked", "value": true },
-    { "t": 1500,"type": "answer", "intent": "YES" }
-  ]
-}
+```kotlin
+Scenario(
+    id = "live_fail_then_switch",
+    station = gangnamFast, speed = 60, targetPct = 80,
+    steps = listOf(
+        Step.RouteTargetStep(0), Step.Arrive(m(1)), Step.Soc(m(1), 42),
+        Step.Answer(m(20), VoiceIntent.YES),          // 화면 버튼을 먼저 누르면 무시됨
+        Step.Move(m(23), 300), Step.RouteTargetStep(m(24), yeoksamFast),
+    ),
+    verdicts = mapOf(yeoksamFast.id to (Verdict.GREEN to ReasonCode.RECENT_SUCCESS)),  // FakeApi 판정
+)
 ```
 
-필수 시나리오 6개: `live_success`, `live_fail_then_switch`, `live_wait_then_success`, `retro_success`, `retro_fail`, `warning_red_switch`.
-`t`는 시뮬레이션 초, `speed`는 배속. `ScenarioPlayer`가 `FakeClock`과 각 Fake 포트에 값을 흘려보낸다.
+- 단계 종류: `RouteTargetStep`(내비 목적지), `Arrive`, `Soc`, `Move`(충전소에서 m만큼 이동), `Power`(시동 끔·켬), `Answer`(FakeVoice 자리).
+- `Power`와 `Answer`는 Fake 포트 밖의 일이라 `ScenarioPlayer`가 `Control` 신호로 내보내고, app 모듈이 `SessionCoordinator.appStopped()/appResumed()/answer()`와 `ArrivalWarningCoordinator.choose()`에 연결한다. adapter가 feature를 import하지 않기 위해서다.
+- 시동이 꺼진 동안(`running = false`) 들어오는 포트 이벤트는 버리고, 다시 켤 때 `VehiclePort.currentSoc()`로 RETRO 비교를 한다.
+
+필수 시나리오 6개(모두 구현, 에뮬레이터 재생 확인): `live_success`, `live_fail_then_switch`, `live_wait_then_success`, `retro_success`, `retro_fail`, `warning_red_switch`.
+`t`는 시뮬레이션 초, `speed`는 배속(DevMenu에서 ×30·×60·×120·×240으로 바꿀 수 있음). `ScenarioPlayer`가 `FakeClock`과 각 Fake 포트에 값을 흘려보낸다.
 
 ---
 
@@ -545,6 +570,8 @@ sequenceDiagram
 ### 5.1 기술 스택
 
 Python 3.12, FastAPI, Pydantic v2, SQLAlchemy 2 + Alembic, PostgreSQL 16, APScheduler(동기화 작업), httpx, pytest. 배포는 Docker 1개 컨테이너 + 관리형 PostgreSQL.
+
+- 2026-10-24 구현 메모: 개발 PC에 Docker가 없어 로컬은 **SQLite**(`DATABASE_URL=sqlite:///./chargecheck.db`)로 돌린다. 테이블은 SQLAlchemy로 PostgreSQL·SQLite 둘 다 되게 쓰고(배열 대신 JSON), 배포 때 `DATABASE_URL`만 PostgreSQL로 바꾼다. 동기화 주기 작업은 APScheduler 대신 FastAPI lifespan의 asyncio 루프로 시작했다(의존성 최소화). Alembic은 첫 배포 전에 붙인다.
 
 ```text
 server/
@@ -574,7 +601,10 @@ server/
 | GET | `/v1/stations/nearby?lat=&lon=&radius=500` | — | `StationOut[]` (최대 30개, 거리순) |
 | GET | `/v1/stations/{stationId}/alternatives?lat=&lon=` | — | `{station: StationOut, status: StationStatusOut, distanceM: int}[]` (GREEN 우선, 최대 3개, 5km 이내) |
 | POST | `/v1/reviews` | `{stationId, tags: ReviewTag[]}` | `202` |
+| PATCH | `/v1/events/{eventId}` | `{"chargerId": "02"}` | `200` — 실패 기록 뒤 운전자가 고른 충전기 번호를 붙인다(같은 기기만) |
 | GET | `/healthz` | — | `200 {"ok": true}` |
+
+**충전기 단위 기록 (2026-10-24 추가)**: 충전소에는 충전기가 여러 대 있다. 차는 SOC만 알 뿐 몇 번 충전기에 꽂았는지 모르므로, 실패 기록은 충전기 번호 없이 바로 올리고, 주차 중에 "몇 번 충전기였나요?"(건너뛰기 가능)에 답하면 `PATCH`로 번호를 붙인다. 정상 기록은 묻지 않는다. `chargerId`는 공공 API의 `chgerId`(예: "01", "02")와 같다.
 
 ```jsonc
 // ChargeEventIn
@@ -586,20 +616,35 @@ server/
   "socStart": 42,
   "socEnd": 47,
   "minutes": 6,
-  "occurredAt": "2026-11-10T08:15:00Z"
+  "occurredAt": "2026-11-10T08:15:00Z",
+  "chargerId": null            // 선택. 보통은 나중에 PATCH로 붙는다
 }
 
 // StationStatusOut
 {
   "stationId": "ME000001",
-  "verdict": "RED",
-  "reasonCode": "PUBLIC_SAYS_OK_BUT_FAILS",
-  "message": "사용 가능으로 표시되지만 최근 실제로는 충전이 안 됐어요",
+  "verdict": "YELLOW",
+  "reasonCode": "SOME_CHARGERS_FAIL",
+  "message": "6대 중 1대에 최근 실패 기록 (5대 정상 또는 기록 없음)",
   "lastSuccessAt": "2026-11-10T05:02:00Z",
   "recentFailCount": 2,
   "publicAvailable": 3,
-  "publicTotal": 4,
+  "publicTotal": 6,
+  "okCount": 5,                // 실패 판정·운영중지가 아닌 충전기 수
+  "chargers": [
+    { "chargerId": "01", "chargerType": "FAST", "connectors": ["DC콤보"], "outputKw": 100, "publicState": "AVAILABLE", "verdict": "GREEN", "recentFailCount": 0, "lastSuccessAt": "2026-11-10T05:02:00Z" },
+    { "chargerId": "02", "chargerType": "FAST", "publicState": "AVAILABLE", "verdict": "RED",   "recentFailCount": 2, "lastSuccessAt": null }
+  ],
   "topTags": ["CABLE_SHORT"]
+}
+
+// StationOut (nearby 응답의 각 항목은 이것 + distanceM + status)
+{
+  "stationId": "ME000003", "name": "역삼 급속충전소", "lat": 37.5006, "lon": 127.0364, "chargerType": "FAST",
+  "address": "서울특별시 강남구 테헤란로 152",
+  "operator": "운영기관명", "operatorCall": "1600-0000",
+  "useTime": "24시간 이용가능", "parkingFree": false, "limitDetail": "",
+  "payment": null              // 공공 데이터에 없음
 }
 ```
 
@@ -638,6 +683,7 @@ erDiagram
     int minutes
     timestamptz occurred_at
     timestamptz received_at
+    text chger_id "NULL 가능"
   }
   REVIEW {
     bigserial id PK
@@ -655,24 +701,38 @@ erDiagram
 
 ### 5.4 판정 규칙 `compute_verdict` (서버 단일 구현)
 
-입력: 최근 24시간 이벤트(시간순), 공공 API 충전기 상태 목록, 현재 시각.
+입력: 최근 24시간 이벤트(시간순), 공공 API 충전기 상태 목록, 현재 시각. **충전기 단위로 먼저 판정하고, 충전소는 그 결과를 모아서 정한다(2026-10-24 개정).**
 
 ```text
-1. public = 공공 API 요약 (available, total, allOutOfService)
-2. lastSuccess = 가장 최근 SUCCESS 이벤트
-3. failsAfter  = lastSuccess 이후 FAIL 이벤트의 서로 다른 device_hash 수 (lastSuccess 없으면 24h 내 전체)
-4. if public.allOutOfService:                       → RED,    PUBLIC_OUT_OF_SERVICE
-5. if failsAfter ≥ 2 and public.available > 0:      → RED,    PUBLIC_SAYS_OK_BUT_FAILS
-6. if failsAfter ≥ 2:                               → RED,    MULTI_FAIL
-7. if failsAfter == 1:                              → YELLOW, FAIL_AFTER_SUCCESS
-8. if lastSuccess within GREEN_WINDOW_H(3h):        → GREEN,  RECENT_SUCCESS
-9. else                                             → GRAY,   NO_RECENT_DATA
+[충전기 판정]  (그 충전기 번호가 붙은 이벤트 + 충전기 번호 없는 SUCCESS)
+1. if public == OUT_OF_SERVICE:                     → RED,    PUBLIC_OUT_OF_SERVICE
+2. lastSuccess = 이 충전기 SUCCESS 또는 번호 없는 SUCCESS 중 가장 최근
+3. failsAfter  = lastSuccess 이후 이 충전기 FAIL의 서로 다른 device_hash 수
+4. if failsAfter ≥ 2: RED (public AVAILABLE이면 PUBLIC_SAYS_OK_BUT_FAILS, 아니면 MULTI_FAIL)
+5. if failsAfter == 1:                              → YELLOW, FAIL_AFTER_SUCCESS
+6. if lastSuccess within 3h:                        → GREEN,  RECENT_SUCCESS
+7. else                                             → GRAY,   NO_RECENT_DATA
+
+[충전소 판정]
+a. total = 공공 API 충전기 수, bad = RED 충전기 수, unknownFails = 충전소 마지막 SUCCESS 이후 번호 없는 FAIL의 서로 다른 기기 수
+b. okCount = RED도 아니고 OUT_OF_SERVICE도 아닌 충전기 수 (YELLOW는 아직 정상으로 셈) − unknownFails (번호 없는 실패는 보수적으로 1대씩 뺌, 0 미만은 0)
+c. if total > 0 and 모든 충전기가 OUT_OF_SERVICE:  → RED,    PUBLIC_OUT_OF_SERVICE
+d. if bad + unknownFails ≥ max(total, 2):            → RED,    (공공 사용가능 > 0이면 PUBLIC_SAYS_OK_BUT_FAILS, 아니면 MULTI_FAIL)
+e. if bad > 0 or unknownFails > 0 or YELLOW 충전기 있음:
+      total ≥ 2 → YELLOW, SOME_CHARGERS_FAIL  ("{total}대 중 {k}대에 최근 실패 기록")
+      total ≤ 1 → YELLOW, FAIL_AFTER_SUCCESS
+f. if 충전소 lastSuccess within 3h:                 → GREEN,  RECENT_SUCCESS
+g. else                                             → GRAY,   NO_RECENT_DATA
 ```
+
+- 핵심: **충전기 한 대 고장으로 충전소 전체를 빨강으로 만들지 않는다.** 빨강은 실패가 모든 충전기를 덮을 만큼 쌓였을 때만.
+- 도착 전 경고(F3)는 RED, 또는 YELLOW 중 `SOME_CHARGERS_FAIL`이 아닌 것에만 띄운다. 일부 충전기만 실패면 경고로 운전을 방해하지 않고 카드에 "6대 중 1대 실패 기록"만 보인다.
 
 | reasonCode | 운전자에게 보이는 문장 |
 | --- | --- |
 | RECENT_SUCCESS | "{n}분 전 실제로 충전됨" |
 | FAIL_AFTER_SUCCESS | "최근 충전 실패 제보 1건" |
+| SOME_CHARGERS_FAIL | "{total}대 중 {k}대에 최근 실패 기록" |
 | MULTI_FAIL | "최근 여러 차가 충전에 실패했어요" |
 | PUBLIC_SAYS_OK_BUT_FAILS | "사용 가능으로 표시되지만 최근 실제로는 충전이 안 됐어요" |
 | PUBLIC_OUT_OF_SERVICE | "운영사 점검·운영 중지" |
@@ -757,9 +817,9 @@ sequenceDiagram
 | --- | --- | --- | --- | --- | --- |
 | 1 | M0 | 10/24 | Pleos 가입·프로젝트, 공공 API 키, 저장소 생성, Gradle 뼈대(모든 모듈 빈 껍데기) | `./gradlew build` 성공 | ✅ |
 | 2 | M1 | 10/24 | `core:model/port/config`, `ChargeSessionMachine` + 전이표 T1–T22 단위 테스트 | 테스트 39개 통과 | ✅ |
-| 3 | M3 | ~10/27 | `adapter:fake` + `ScenarioPlayer` + `DevMenuScreen`, `SessionCoordinator` | 시나리오 6개가 에뮬레이터에서 재생 | 🔶 2/6 (live_success, live_fail 에뮬레이터 확인) |
-| 4 | M5 | 10/27–11/01 | `adapter:pleos`(SOC, NaviHelper) 에뮬레이터 연동, Virtual Console로 SOC 변경 확인 | real flavor에서 LIVE 성공 기록 | ⏳ |
-| 5 | M2 | 11/01–11/06 | 서버: `/v1/events`, `/status`, `compute_verdict` + 테스트, 공공 API 동기화(픽스처로 먼저) | pytest 통과, Docker 기동 | ⏳ |
+| 3 | M3 | ~10/27 | `adapter:fake` + `ScenarioPlayer` + `DevMenuScreen`, `SessionCoordinator` | 시나리오 6개가 에뮬레이터에서 재생 | ✅ 6/6 에뮬레이터 확인 (F3 도착 전 경고 기본 동작 포함) |
+| 4 | M5 | 10/27–11/01 | `adapter:pleos`(SOC, NaviHelper) 에뮬레이터 연동, Virtual Console로 SOC 변경 확인 | real flavor에서 LIVE 성공 기록 | ✅ Virtual Console SOC로 LIVE 정상 기록 확인 + 지도 화면·내비 목적지 연동 (도착은 개발용 버튼) + 주행 중 화면(DO 선언, CarUxRestrictions) |
+| 5 | M2 | 11/01–11/06 | 서버: `/v1/events`, `/status`, `compute_verdict` + 테스트, 공공 API 동기화(픽스처로 먼저) | pytest 통과, Docker 기동 | ✅ pytest 29개, 충전기 단위 판정, 앱 연결·에뮬레이터 확인 (Docker·실제 공공 키 동기화는 미확인) |
 | 6 | M4 | 11/06–11/12 | UI: Home, ChargingScreen, AskSheet, WarningCard, Consent | 스크린샷 | ⏳ |
 | 7 | M6 | 11/12–11/14 | 시뮬레이터 + 시연 영상, GitHub README, `apk/팀명_ChargeCheck_release.apk` | 1차 제출(마감 11/15) | ⏳ |
 | 8 | M7 | 11/16–12/02 | F3 대체 충전소, F4, 실패 재시도, 안정화 | 2차 PT용 동작 앱 | ⏳ |
@@ -768,7 +828,8 @@ sequenceDiagram
 
 ## 9. 테스트 전략
 
-- **상태 머신**: 전이표 T1–T22 각각 1개 이상 테스트(`chargecheck/android/feature/session/src/test/.../ChargeSessionMachineTest.kt`, 39개 통과). 상태 머신은 순수 함수라 고정된 `Instant`만으로 시간 경과를 표현한다.
+- **상태 머신**: 전이표 T1–T22 각각 1개 이상 테스트(`chargecheck/android/feature/session/src/test/.../ChargeSessionMachineTest.kt`, 39개 통과).
+- **코디네이터**: `SessionCoordinatorTest`(포트 → 상태 머신 → Effect, LIVE·RETRO·재출발 5개), `ArrivalWarningCoordinatorTest`(경고·바꾸기·그대로 3개). 전체 47개 통과. 상태 머신은 순수 함수라 고정된 `Instant`만으로 시간 경과를 표현한다.
 - **판정 규칙**: `compute_verdict` 표 기반 테스트(규칙 4–9 각각).
 - **계약 테스트**: Android `RemoteApiAdapter`와 서버 스키마가 같은 JSON 예시(§5.2)로 직렬화/역직렬화 되는지.
 - **시나리오 테스트**: 시나리오 6개를 `demo` flavor 계측 테스트로 자동 실행.
@@ -781,7 +842,10 @@ sequenceDiagram
 | 항목 | 영향 | 대안 |
 | --- | --- | --- |
 | 시동이 꺼진 동안 Pleos 앱이 실행되는지 | LIVE 판정 범위 | RETRO 경로로 커버 (설계 반영됨) |
-| `EvBattery` 메서드 시그니처·갱신 빈도 | 어댑터 구현 | 로그인 후 API Reference 확인 |
+| ~~`EvBattery` 메서드 시그니처·갱신 빈도~~ | — | ✅ 2026-10-24 확인 (§4.14) |
+| 주행 중(D) 우리 화면 표시: 에뮬레이터는 DO 선언으로 ✅. 실차·심사에서 인정 조건 | F3 경고 표시 | 10/28 설명회 질문(카테고리 Mobility Services 변경 포함). 안 되면 알림 |
+| 외부 지도 SDK·타일(OSM/카카오/네이버) 사용 허용 여부 | 지도 화면 | 10/28 설명회 질문. 안 되면 지도 없이 목록 화면 |
+| 실제 주행 시 `onDestinationArrived` 동작 | 도착 감지 | 에뮬레이터에서 재현 불가. 정차 + 반경(StoppedNearStation)으로 보완 |
 | 표준 AAOS `EV_CHARGE_STATE` 읽기 가능 여부 | 감지 속도 | 가능하면 `VehiclePort.chargeState()` 추가 |
 | Pleos 에뮬레이터에서 Android TTS/STT/Location 동작 | 음성·위치 | 버튼 UI, NaviHelper 위치 이벤트 |
 | 공공 API `stat` 코드 의미, `getChargerInfo` 필드 | 판정 | `PUBLIC_STAT_MAP` 한 곳만 수정 |
