@@ -1,0 +1,12 @@
+# 이 파일을 복사해서 `local.properties` 라는 이름으로 만들고 값을 채운다.
+# local.properties 는 .gitignore 로 제외돼 있어 저장소에 올라가지 않는다. 실제 값은 절대 커밋하지 않는다.
+#
+#   cp local.properties.example local.properties        (Windows: copy local.properties.example local.properties)
+
+# Android SDK 위치. Android Studio로 폴더를 열면 자동으로 채워지므로 직접 쓸 필요는 보통 없다.
+# sdk.dir=C\:\\Users\\<사용자>\\AppData\\Local\\Android\\Sdk
+
+# Pleos Playground > Workspace > My Project > 프로젝트 정보 화면에서 복사한다.
+PLEOS_PROJECT_ID=
+PLEOS_CLIENT_ID=
+PLEOS_CLIENT_SECRET=

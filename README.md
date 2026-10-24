@@ -88,6 +88,10 @@ Windows에서는 `./gradlew` 대신 `gradlew.bat`을 씁니다.
 3. **비밀값:** 비밀값은 저장소에 올리지 않습니다. `demo` 빌드는 비밀값 없이 동작합니다.
    - **앱(`real` 빌드):** Pleos 클라이언트 정보를 `chargecheck/android/local.properties`에 넣습니다. 이 파일은 `.gitignore`로 제외돼 있습니다.
    - **서버:** 공공데이터포털 충전소 API 키를 환경변수 `PUBLIC_API_KEY`로 줍니다.
+   - **팀원 설정 방법:** 키는 저장소에 없습니다. 아래 예시 파일을 복사해서 값을 채웁니다.
+     - 앱: `chargecheck/android/local.properties.example` → `local.properties` (Pleos 값은 Pleos 프로젝트의 **팀 관리**에 초대받으면 프로젝트 정보 화면에서 직접 복사할 수 있습니다)
+     - 서버: `chargecheck/server/.env.example` → `.env`
+     - 공공 API 키는 [공공데이터포털](https://www.data.go.kr/data/15076352/openapi.do)에서 **본인 계정으로 활용신청(자동승인, 무료)** 하면 각자 하루 1,000건씩 쓸 수 있습니다. 한 키를 같이 쓰면 한도를 나눠 쓰게 됩니다.
 4. **에뮬레이터에서 상황 만들기 (`real` 빌드):** Pleos Virtual Console에서 SOC와 기어 상태를 바꿔 충전 성공·실패를 재현합니다.
    - **Energy > Battery SOC** 슬라이더: SOC 값을 바꿉니다.
    - **Motion > Gear Selection**: 기어 상태(주차 등)를 바꿉니다.
