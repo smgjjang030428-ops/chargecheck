@@ -35,6 +35,8 @@ interface NaviPort {
     /** 목적지·경유지 도착. */
     fun arrivals(): Flow<RouteTarget>
     suspend fun addWaypoint(target: RouteTarget): Result<Unit>
+    /** 기본 내비에 목적지를 넘겨 길안내를 시작한다(지도 화면의 [여기로 안내]). Pleos: NaviHelper.requestRoute */
+    suspend fun setDestination(target: RouteTarget): Result<Unit>
 }
 
 interface LocationPort {
@@ -52,6 +54,8 @@ interface VoicePort {
 
 interface ChargeCheckApiPort {
     suspend fun postEvent(event: ChargeEvent): Result<Unit>
+    /** 이미 올린 실패 기록에 운전자가 고른 충전기 번호를 붙인다. PATCH /v1/events/{eventId} */
+    suspend fun attachCharger(eventId: String, chargerId: String): Result<Unit>
     suspend fun stationStatus(id: StationId): Result<StationStatus>
     suspend fun nearbyStations(at: GeoPoint, radiusM: Int): Result<List<Station>>
     suspend fun alternatives(id: StationId, at: GeoPoint): Result<List<Pair<Station, StationStatus>>>

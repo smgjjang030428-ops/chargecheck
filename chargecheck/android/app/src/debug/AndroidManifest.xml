@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 디버그 빌드만: 개발 PC 서버(http://10.0.2.2:8000)에 평문 HTTP로 접속 허용. 배포는 HTTPS만 쓴다. -->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application android:usesCleartextTraffic="true" />
+</manifest>

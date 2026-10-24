@@ -27,6 +27,8 @@ enum class Verdict { GREEN, YELLOW, RED, GRAY }
 enum class ReasonCode {
     RECENT_SUCCESS,
     FAIL_AFTER_SUCCESS,
+    /** 충전기 여러 대 중 일부에만 실패 기록. 나머지는 쓸 수 있으므로 도착 전 경고는 띄우지 않는다. */
+    SOME_CHARGERS_FAIL,
     MULTI_FAIL,
     PUBLIC_OUT_OF_SERVICE,
     PUBLIC_SAYS_OK_BUT_FAILS,
@@ -34,6 +36,34 @@ enum class ReasonCode {
 }
 
 enum class ReviewTag { CABLE_SHORT, SPACE_NARROW, HAS_ROOF, SLOW_SPEED, PAYMENT_ISSUE, BLOCKED_BY_CAR }
+
+enum class PublicState { AVAILABLE, CHARGING, OUT_OF_SERVICE, UNKNOWN }
+
+/** 충전기 한 대의 판정. chargerId는 공공 API의 chgerId("01", "02" …)와 같다. */
+data class ChargerStatus(
+    val chargerId: String,
+    val chargerType: ChargerType,
+    val publicState: PublicState,
+    val verdict: Verdict,
+    val recentFailCount: Int,
+    /** 커넥터 방식. 예: ["DC콤보"], ["DC차데모", "AC3상"] */
+    val connectors: List<String> = emptyList(),
+    val outputKw: Int? = null,
+)
+
+/** 충전소 상세 정보(공공 API). 결제 수단은 공공 데이터에 없어 null이면 운영사로 안내한다. */
+data class StationInfo(
+    val address: String = "",
+    val operator: String = "",
+    val operatorCall: String = "",
+    val useTime: String = "",
+    val parkingFree: Boolean? = null,
+    val limitDetail: String = "",
+    val payment: String? = null,
+)
+
+/** 지도 화면 한 줄: 충전소 + 상세 정보 + 판정. */
+data class NearbyStation(val station: Station, val info: StationInfo, val status: StationStatus)
 
 data class StationStatus(
     val stationId: StationId,
@@ -46,6 +76,11 @@ data class StationStatus(
     val publicAvailable: Int?,
     val publicTotal: Int?,
     val topTags: List<ReviewTag>,
+    /** 서버가 만든 운전자용 문장(예: "6대 중 1대에 최근 실패 기록"). */
+    val message: String = "",
+    /** 실패 판정·운영중지가 아닌 충전기 수. */
+    val okCount: Int? = null,
+    val chargers: List<ChargerStatus> = emptyList(),
 )
 
 enum class ChargeResult { SUCCESS, FAIL }
@@ -63,6 +98,8 @@ data class ChargeEvent(
     val socEnd: Int,
     val minutes: Int,
     val occurredAt: Instant,
+    /** 몇 번 충전기였는지. 차는 알 수 없으므로 보통 null이고, 실패 뒤 운전자가 고르면 attachCharger로 붙인다. */
+    val chargerId: String? = null,
 )
 
 data class SocSample(val pct: Int, val at: Instant)

@@ -11,9 +11,9 @@
 | --- | --- | --- | --- | --- |
 | 1 | M0 | Gradle 멀티 모듈 뼈대, 모든 모듈 껍데기 | 10/24 | ✅ |
 | 2 | M1 | `core:model` · `core:port` · `core:config`, `ChargeSessionMachine` + 전이표 T1–T22 단위 테스트 | 10/24 | ✅ |
-| 3 | M3 | Fake 어댑터 + 시나리오 재생 + SessionCoordinator | ~10/27 | 🔶 시나리오 2/6 |
-| 4 | M5 | Pleos SDK 연결(배터리 SOC, NaviHelper), 에뮬레이터 + Virtual Console 검증 | 10/27–11/01 | ⏳ |
-| 5 | M2 | 서버(`../server`) | 11/01–11/06 | ⏳ |
+| 3 | M3 | Fake 어댑터 + 시나리오 재생 + SessionCoordinator (+ F3 도착 전 경고 기본) | ~10/27 | ✅ 시나리오 6/6, 테스트 47개 |
+| 4 | M5 | Pleos SDK 연결(배터리 SOC, NaviHelper), 에뮬레이터 + Virtual Console 검증 + 충전소 지도 | 10/27–11/01 | ✅ (+ 주행 중 화면, 실차 인정 조건은 10/28 확인) |
+| 5 | M2 | 서버(`../server`) + 충전기 단위 기록·판정 | 11/01–11/06 | ✅ (실제 공공 키 동기화·배포는 남음) |
 | 6 | M4 | 화면: Home, ChargingScreen, AskSheet, WarningCard, Consent | 11/06–11/12 | ⏳ |
 | 7 | M6 | 시연 영상, README, release APK → 1차 제출 | 11/12–11/14 | ⏳ |
 | 8 | M7 | 대체 충전소, 태그 평가, 실패 재시도, 안정화 → 2차 PT | 11/16–12/02 | ⏳ |

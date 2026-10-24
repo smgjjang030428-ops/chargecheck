@@ -7,7 +7,9 @@ plugins {
 
 android {
     namespace = "com.chargecheck.adapter.android"
-    compileSdk = 34
+    // CarUxRestrictionsManager(android.car)는 차량 OS에 들어 있는 선택 라이브러리다
+    useLibrary("android.car")
+    compileSdk = 36
     defaultConfig { minSdk = 28 }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

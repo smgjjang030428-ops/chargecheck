@@ -7,12 +7,13 @@ plugins {
 
 android {
     namespace = "com.chargecheck.feature.warning"
-    compileSdk = 34
+    compileSdk = 36
     defaultConfig { minSdk = 28 }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+    testOptions.unitTests.all { it.useJUnitPlatform() }
 }
 
 kotlin {
@@ -24,4 +25,10 @@ dependencies {
     implementation(project(":core:port"))
     implementation(project(":core:config"))
     implementation(libs.kotlinx.coroutines.core)
+
+    testImplementation(platform(libs.junit.bom))
+    testImplementation(libs.junit.jupiter)
+    testImplementation(libs.kotlin.test.junit5)
+    testImplementation(libs.kotlinx.coroutines.test)
+    testRuntimeOnly(libs.junit.platform.launcher)
 }

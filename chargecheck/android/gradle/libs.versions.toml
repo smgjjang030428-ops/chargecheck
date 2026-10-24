@@ -6,8 +6,9 @@ junit = "5.12.2"
 composeBom = "2025.06.00"
 activityCompose = "1.10.1"
 coreKtx = "1.16.0"
-pleosVehicle = "2.3.1"
+pleosVehicle = "2.3.2"
 pleosNaviHelper = "3.0.5"
+osmdroid = "6.1.20"
 
 [libraries]
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
@@ -22,6 +23,8 @@ androidx-activity-compose = { module = "androidx.activity:activity-compose", ver
 compose-bom = { module = "androidx.compose:compose-bom", version.ref = "composeBom" }
 compose-material3 = { module = "androidx.compose.material3:material3" }
 compose-ui = { module = "androidx.compose.ui:ui" }
+compose-foundation = { module = "androidx.compose.foundation:foundation" }
+osmdroid = { module = "org.osmdroid:osmdroid-android", version.ref = "osmdroid" }
 
 pleos-vehicle = { module = "ai.pleos.playground:Vehicle", version.ref = "pleosVehicle" }
 pleos-navihelper = { module = "ai.pleos.playground:NaviHelper", version.ref = "pleosNaviHelper" }

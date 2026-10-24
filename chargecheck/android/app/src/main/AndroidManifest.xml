@@ -19,6 +19,8 @@
         <activity
             android:name=".MainActivity"
             android:exported="true">
+            <!-- 주행 중 허용(Distraction Optimized). 주행 중에는 DrivingScreen만 보여준다(Pleos 주행 안전 가이드). -->
+            <meta-data android:name="distractionOptimized" android:value="true" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
