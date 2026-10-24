@@ -3,6 +3,7 @@
 
     <!-- 기획문서/앱구조_명세서_AI용.md §4.13 -->
     <uses-permission android:name="pleos.car.permission.CAR_ENERGY" />
+    <uses-permission android:name="pleos.car.permission.CAR_DRIVE" />
     <uses-permission android:name="pleos.car.permission.NAVI_ROUTE" />
     <uses-permission android:name="pleos.car.permission.NAVI_ROUTE_SEARCH" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />

@@ -11,7 +11,7 @@ from app.config import settings
 from app.db import Base, SessionLocal, engine
 from app.jobs.public_sync import sync_info, sync_status
 from app.models import Station
-from app.routers import events, reviews, stations
+from app.routers import events, places, reviews, stations
 
 log = logging.getLogger("chargecheck")
 
@@ -54,6 +54,7 @@ app = FastAPI(title="ChargeCheck", version="0.1.0", lifespan=lifespan)
 app.include_router(events.router)
 app.include_router(stations.router)
 app.include_router(reviews.router)
+app.include_router(places.router)
 
 
 @app.get("/healthz")

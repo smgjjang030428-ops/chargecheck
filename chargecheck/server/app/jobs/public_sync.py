@@ -12,11 +12,12 @@ import argparse
 import json
 import logging
 import time
+from collections.abc import Iterator
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import case, delete, func, select, update
 from sqlalchemy.orm import Session
 
 from app.config import SLOW_CHARGER_TYPES, settings
@@ -63,8 +64,14 @@ def items_of(payload: dict) -> list[dict]:
 
 
 def fetch_all(client: httpx.Client, operation: str, params: dict) -> list[dict]:
-    """페이지를 끝까지 읽는다. 5xx·타임아웃은 3번까지 다시 시도한다(실제로 504가 가끔 온다)."""
-    rows: list[dict] = []
+    """페이지를 끝까지 읽어 한 목록으로. 상태 변경분처럼 작은 응답에 쓴다."""
+    return [row for batch in iter_pages(client, operation, params) for row in batch]
+
+
+def iter_pages(client: httpx.Client, operation: str, params: dict) -> Iterator[list[dict]]:
+    """페이지를 하나씩 돌려준다(전국 목록 52만 대를 한꺼번에 메모리에 올리지 않기 위해).
+    5xx·타임아웃은 3번까지 다시 시도한다(실제로 504가 가끔 온다)."""
+    seen = 0
     page = 1
     while True:
         query = {"serviceKey": settings.PUBLIC_API_KEY, "pageNo": page, "numOfRows": PAGE_SIZE, "dataType": "JSON", **params}
@@ -84,64 +91,107 @@ def fetch_all(client: httpx.Client, operation: str, params: dict) -> list[dict]:
         if payload is None:
             raise RuntimeError(f"{operation} 호출 실패")
         batch = items_of(payload)
-        rows.extend(batch)
+        seen += len(batch)
+        if batch:
+            yield batch
         total = int(payload.get("totalCount") or 0)
-        if not batch or len(rows) >= total:
-            return rows
+        if not batch or seen >= total:
+            return
         page += 1
 
 
-def upsert_charger_info(session: Session, rows: list[dict]) -> tuple[int, int]:
-    """getChargerInfo 행들을 충전소·충전기 테이블에 반영한다. 반환: (충전소 수, 충전기 수)."""
-    now = datetime.now(timezone.utc)
-    skipped_coords = 0
-    stations: dict[str, list[dict]] = {}
-    for row in rows:
-        if row.get("delYn") == "Y":
-            charger = session.get(Charger, (row["statId"], row["chgerId"]))
-            if charger is not None:
-                session.delete(charger)
-            continue
-        stations.setdefault(row["statId"], []).append(row)
+def _insert(session: Session, model):
+    """PostgreSQL·SQLite 둘 다 되는 INSERT … ON CONFLICT DO UPDATE."""
+    if session.get_bind().dialect.name == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert
+    else:
+        from sqlalchemy.dialects.sqlite import insert
+    return insert(model)
 
-    for stat_id, chargers in stations.items():
-        first = chargers[0]
+
+def _chunks(items: list, size: int = 1000) -> Iterator[list]:
+    for i in range(0, len(items), size):
+        yield items[i:i + size]
+
+
+def _upsert(session: Session, model, rows: list[dict], keys: list[str]) -> None:
+    for chunk in _chunks(rows):
+        stmt = _insert(session, model).values(chunk)
+        update = {c: stmt.excluded[c] for c in chunk[0] if c not in keys}
+        session.execute(stmt.on_conflict_do_update(index_elements=keys, set_=update))
+
+
+def upsert_charger_info(session: Session, rows: list[dict], refresh_kinds: bool = True) -> tuple[int, int]:
+    """getChargerInfo 행들을 충전소·충전기 테이블에 한꺼번에 반영한다(전국 52만 대 대비).
+    반환: (충전소 수, 충전기 수). 페이지마다 부를 때는 refresh_kinds=False로 두고 끝에 refresh_station_kinds를 부른다."""
+    now = datetime.now(timezone.utc)
+    stations: dict[str, dict] = {}
+    chargers: dict[tuple[str, str], dict] = {}
+    deleted: list[tuple[str, str]] = []
+    bad: set[str] = set()
+    for row in rows:
+        stat_id, chger_id = row.get("statId"), row.get("chgerId")
+        if not stat_id or not chger_id:
+            continue
+        if row.get("delYn") == "Y":
+            deleted.append((stat_id, chger_id))
+            continue
         try:
-            lat, lon = float(first["lat"]), float(first["lng"])
+            lat, lon = float(row["lat"]), float(row["lng"])
         except (KeyError, TypeError, ValueError):
             continue
         if not plausible_coords(lat, lon):
-            skipped_coords += 1
-            # 예전에 저장된 같은 충전소가 있으면 지운다(지도에 엉뚱한 위치로 나오지 않게)
-            for old in session.scalars(select(Charger).where(Charger.stat_id == stat_id)).all():
-                session.delete(old)
-            if (old_station := session.get(Station, stat_id)) is not None:
-                session.delete(old_station)
+            bad.add(stat_id)
             continue
-        kinds = {("SLOW" if c.get("chgerType") in SLOW_CHARGER_TYPES else "FAST") for c in chargers}
-        station = session.get(Station, stat_id) or Station(stat_id=stat_id)
-        station.name = first.get("statNm", "")
-        station.address = first.get("addr", "")
-        station.lat, station.lon = lat, lon
-        station.operator = first.get("busiNm", "")
-        station.operator_call = first.get("busiCall", "")
-        station.use_time = first.get("useTime", "")
-        station.parking_free = first.get("parkingFree", "")
-        station.limit_detail = first.get("limitDetail", "") if first.get("limitYn") == "Y" else ""
-        station.charger_type = "FAST" if "FAST" in kinds else "SLOW"
-        station.updated_at = now
-        session.merge(station)
-        for c in chargers:
-            charger = session.get(Charger, (stat_id, c["chgerId"])) or Charger(stat_id=stat_id, chger_id=c["chgerId"])
-            charger.chger_type = c.get("chgerType", "")
-            charger.output_kw = _int_or_none(c.get("output"))
-            charger.public_stat = str(c.get("stat", "9"))
-            charger.stat_upd_dt = parse_kst(c.get("statUpdDt"))
-            session.merge(charger)
+        if stat_id not in stations:
+            stations[stat_id] = dict(
+                stat_id=stat_id,
+                name=row.get("statNm", ""),
+                address=row.get("addr", ""),
+                lat=lat,
+                lon=lon,
+                operator=row.get("busiNm", ""),
+                operator_call=row.get("busiCall", ""),
+                use_time=row.get("useTime", ""),
+                parking_free=row.get("parkingFree", ""),
+                limit_detail=row.get("limitDetail", "") if row.get("limitYn") == "Y" else "",
+                charger_type="SLOW",
+                updated_at=now,
+            )
+        if row.get("chgerType") not in SLOW_CHARGER_TYPES:
+            stations[stat_id]["charger_type"] = "FAST"
+        chargers[(stat_id, chger_id)] = dict(
+            stat_id=stat_id,
+            chger_id=chger_id,
+            chger_type=row.get("chgerType", ""),
+            output_kw=_int_or_none(row.get("output")),
+            public_stat=str(row.get("stat", "9")),
+            stat_upd_dt=parse_kst(row.get("statUpdDt")),
+        )
+    bad -= stations.keys()  # 같은 충전소의 다른 행에 정상 좌표가 있으면 살린다
+
+    if stations:
+        _upsert(session, Station, list(stations.values()), ["stat_id"])
+    if chargers:
+        _upsert(session, Charger, list(chargers.values()), ["stat_id", "chger_id"])
+    for stat_id, chger_id in deleted:
+        session.execute(delete(Charger).where(Charger.stat_id == stat_id, Charger.chger_id == chger_id))
+    # 자리표시 좌표 충전소는 예전에 저장된 것까지 지운다(지도에 엉뚱한 위치로 나오지 않게)
+    for chunk in _chunks(sorted(bad)):
+        session.execute(delete(Charger).where(Charger.stat_id.in_(chunk)))
+        session.execute(delete(Station).where(Station.stat_id.in_(chunk)))
+    if refresh_kinds:
+        refresh_station_kinds(session)
     session.commit()
-    if skipped_coords:
-        log.info("좌표가 자리표시값인 충전소 %d곳은 건너뜀", skipped_coords)
-    return len(stations) - skipped_coords, sum(len(v) for v in stations.values())
+    if bad:
+        log.info("좌표가 자리표시값인 충전소 %d곳은 건너뜀", len(bad))
+    return len(stations), len(chargers)
+
+
+def refresh_station_kinds(session: Session) -> None:
+    """충전소 급속/완속을 저장된 충전기 전체로 다시 정한다(페이지 경계로 나뉜 충전소 대비)."""
+    fast = select(Charger.stat_id).where(Charger.stat_id == Station.stat_id, Charger.chger_type.not_in(SLOW_CHARGER_TYPES)).exists()
+    session.execute(update(Station).values(charger_type=case((fast, "FAST"), else_="SLOW")))
 
 
 def apply_status(session: Session, rows: list[dict]) -> int:
@@ -163,10 +213,20 @@ def apply_status(session: Session, rows: list[dict]) -> int:
 
 
 def sync_info(session: Session, client: httpx.Client) -> tuple[int, int]:
-    rows: list[dict] = []
-    for zcode in [z.strip() for z in settings.PUBLIC_ZCODES.split(",") if z.strip()]:
-        rows.extend(fetch_all(client, "getChargerInfo", {"zcode": zcode}))
-    return upsert_charger_info(session, rows)
+    """PUBLIC_ZCODES의 시·도별(또는 ALL = 전국) 목록을 페이지 단위로 받아 바로 저장한다."""
+    zcodes = [z.strip() for z in settings.PUBLIC_ZCODES.split(",") if z.strip()]
+    params_list = [{}] if any(z.upper() == "ALL" for z in zcodes) else [{"zcode": z} for z in zcodes]
+    n_stations = n_chargers = 0
+    for params in params_list:
+        for i, batch in enumerate(iter_pages(client, "getChargerInfo", params), start=1):
+            s, c = upsert_charger_info(session, batch, refresh_kinds=False)
+            n_stations, n_chargers = n_stations + s, n_chargers + c
+            log.info("목록 %s %d페이지: 누적 충전기 %d대", params.get("zcode", "전국"), i, n_chargers)
+    refresh_station_kinds(session)
+    session.commit()
+    # 충전소가 여러 페이지에 걸치면 두 번 셀 수 있어 실제 개수는 DB에서 다시 센다
+    n_stations = session.scalar(select(func.count()).select_from(Station))
+    return n_stations, n_chargers
 
 
 def sync_status(session: Session, client: httpx.Client, period_min: int = 10) -> int:

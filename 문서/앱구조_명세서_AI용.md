@@ -228,6 +228,8 @@ interface VehiclePort {
     suspend fun currentSoc(): Int?
     /** 목표 충전량(%) — 없으면 null. ⚠️ UNVERIFIED: Pleos에서 읽기 API 존재 여부 */
     suspend fun chargeTargetPct(): Int?
+    /** 남은 주행 가능 거리(km). Pleos: Odometer.getRangeRemainingDistance(미터, 2026-10-25 에뮬레이터 확인), 권한 CAR_DRIVE */
+    suspend fun remainingRangeKm(): Double? = null
 }
 
 interface DrivingStatePort {
@@ -464,10 +466,14 @@ sequenceDiagram
 | `ReviewSheet` | Ended + 주차 | ✕ | 태그 칩 6개, 건너뛰기 |
 | `DevMenuScreen` | demo flavor | ✕ | 시나리오 목록, 재생/정지, 시간 배속 |
 | `StationMapScreen` | real flavor, 주차 중 | ✕(주차 전용) | 주변 충전소 지도(우리 판정 색 핀), 핀 → 상세 카드 → [여기로 안내](`NaviPort.setDestination`) |
+| 지역 검색 상자 | 지도 위(주차 중) | ✕ | 목적지·지역 검색 → 결과 목록(장소 / 충전소) |
+| `RoutePanel` (가는 길 충전소) | 검색 결과 선택(주차 중) | ✕ | "○○까지 22.8km · 남은 주행 8km · 배터리 8%", 충전 필요 배너(초록: 충전 없이 갈 수 있음 / 노랑: 추천 충전소에 들르기 / 빨강: 갈 수 있는 곳 없음), 경로 순 충전소 줄(지점 km · 도착 예상 배터리 · 경로 이탈 m · 사용 가능 n/m · 추천 · 가기 어려움), [들렀다 가기](목적지 + 경유지) [바로 안내] [닫기]. 지도에는 경로선·목적지·추천 핀(크게) |
 | 충전소 상세 카드 | 핀 선택(주차 중) | ✕ | 판정 문장, **충전 타입**(급속 100kW 4대 · 완속 7kW 2대), **커넥터**(DC콤보 · AC완속), **실시간**(사용 가능 5 · 충전 중 1), 충전기별 줄(번호·종류·kW·커넥터·공공 상태·우리 실패 기록), **결제**, 이용(시간·주차 무료 여부·이용 제한) |
 
 - 결제 수단은 공공 API에 필드가 없다(2026-10-24 확인). 지어내지 않고 "공공 데이터에 결제 정보 없음 · 운영사 확인: {운영기관} {연락처}"로 안내한다. 서버 `StationOut.payment`는 확인된 정보가 생기면 채우는 자리(지금은 null).
 - 커넥터 방식은 공공 `chgerType` 코드를 서버 `CONNECTOR_MAP`으로 바꾼다. ⚠️ 코드표는 활용가이드로 최종 확인 필요.
+
+- **지역 검색 + 가는 길 충전소(2026-10-25 구현·에뮬레이터 확인)**: 목적지를 고르면 차의 현재 위치·남은 주행 가능 거리·SOC를 서버 `/v1/stations/along-route`에 보내고, 경로 위 믿을 만한 급속 충전소를 받는다. 기본 내비도 주행 가능 거리를 넘으면 충전소를 넣어 주지만, 우리는 **실패 기록이 많은 곳(RED)·운영 중지만 있는 곳을 빼고** 판정 색과 도착 배터리로 고르게 하는 것이 차이다. [들렀다 가기] = `setDestination(목적지)` → 1.5초 뒤 `addWaypoint(충전소)`. 에뮬레이터 기본 내비는 경로를 그리지 않아(기존 확인 사항) SDK 호출 성공까지만 확인.
 
 - 상태 색: GREEN=초록, YELLOW=노랑, RED=빨강, GRAY=회색. 다른 곳에 색을 쓰지 않는다.
 - 주행 제한은 `DrivingStatePort.isParked()`로 판단하고, 제한 중에는 키보드·긴 글·목록 스크롤을 숨긴다(Pleos 주행 규제 가이드).
@@ -507,6 +513,7 @@ sequenceDiagram
 
 ```xml
 <uses-permission android:name="pleos.car.permission.CAR_ENERGY" />        <!-- EvBattery SOC -->
+<uses-permission android:name="pleos.car.permission.CAR_DRIVE" />         <!-- Odometer 남은 주행 가능 거리 -->
 <uses-permission android:name="pleos.car.permission.NAVI_ROUTE" />        <!-- 목적지·이벤트 조회 -->
 <uses-permission android:name="pleos.car.permission.NAVI_ROUTE_SEARCH" /> <!-- 경유지 추가 -->
 <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
@@ -602,7 +609,25 @@ server/
 | GET | `/v1/stations/{stationId}/alternatives?lat=&lon=` | — | `{station: StationOut, status: StationStatusOut, distanceM: int}[]` (GREEN 우선, 최대 3개, 5km 이내) |
 | POST | `/v1/reviews` | `{stationId, tags: ReviewTag[]}` | `202` |
 | PATCH | `/v1/events/{eventId}` | `{"chargerId": "02"}` | `200` — 실패 기록 뒤 운전자가 고른 충전기 번호를 붙인다(같은 기기만) |
+| GET | `/v1/places/search?q=&lat=&lon=` | — | `PlaceOut[]` — 일반 장소(지도 서비스, 300m 안 같은 이름은 하나만) + 이름·주소가 맞는 충전소 최대 6곳(가까운 순). `kind`: PLACE / STATION |
+| GET | `/v1/stations/along-route?fromLat&fromLon&toLat&toLon&rangeKm&soc&fastOnly=true` | — | `AlongRouteOut` (아래) |
 | GET | `/healthz` | — | `200 {"ok": true}` |
+
+**가는 길 충전소 (2026-10-25 추가, `services/along.py`)**
+1. 경로: OSRM 도로 경로(`source: ROAD`), 실패하면 직선(`STRAIGHT`).
+2. 경로를 2km마다 찍어 1.5km 안 충전소를 모으고, 경로에 투영해 `alongKm`(출발점에서 경로를 따라간 거리)·`detourM`(경로 이탈)을 구한다.
+3. 판정 RED, 쓸 수 있는 충전기 없음(운영 중지·RED만), 버스 전용, (`fastOnly`) 급속 없음은 뺀다. 5km 구간마다 가장 좋은 곳 하나(판정 색 → 정상 충전기 수 → 이탈 거리).
+4. `reachable` = `alongKm ≤ rangeKm × 0.85`, `arrivalSoc` = `soc × (1 − alongKm / rangeKm)`, `needsCharge` = 경로 길이 > `rangeKm × 0.85`.
+5. 충전이 필요하면 `recommendedId` = 갈 수 있는 곳 중 GREEN 우선, 그다음 가장 먼 곳(한 번 충전으로 최대한 멀리).
+- 외부 서비스(Nominatim·OSRM 공개 서버)는 개발·시연용. 출시 전 카카오·네이버·티맵 등 이용 허락된 API로 바꾼다. 실패해도 앱은 멈추지 않는다(장소 없음 / 직선 근사).
+
+```jsonc
+// AlongRouteOut
+{ "routeKm": 9.5, "source": "ROAD", "rangeKm": 8.0, "needsCharge": true,
+  "route": [[37.4979, 127.0276], ...],
+  "candidates": [ { "station": StationOut, "status": StationStatusOut, "alongKm": 0.9, "detourM": 168, "reachable": true, "arrivalSoc": 7 } ],
+  "recommendedId": "..." }
+```
 
 **충전기 단위 기록 (2026-10-24 추가)**: 충전소에는 충전기가 여러 대 있다. 차는 SOC만 알 뿐 몇 번 충전기에 꽂았는지 모르므로, 실패 기록은 충전기 번호 없이 바로 올리고, 주차 중에 "몇 번 충전기였나요?"(건너뛰기 가능)에 답하면 `PATCH`로 번호를 붙인다. 정상 기록은 묻지 않는다. `chargerId`는 공공 API의 `chgerId`(예: "01", "02")와 같다.
 
@@ -744,7 +769,7 @@ g. else                                             → GRAY,   NO_RECENT_DATA
 
 | 작업 | 주기 | 호출 | 비고 |
 | --- | --- | --- | --- |
-| 충전소·충전기 목록 전체 | 매일 04:00 | `getChargerInfo` | ✅ 2026-10-24 서울 실데이터로 확인(12,916곳·75,470대) |
+| 충전소·충전기 목록 전체 | 매일 04:00 | `getChargerInfo` | ✅ 2026-10-24 전국 실데이터로 확인(100,096곳·521,372대, 약 5분, 페이지 단위 일괄 저장). `PUBLIC_ZCODES=ALL`이면 지역 코드 없이 전국 |
 | 상태 변경분 | 5분마다 | `GET https://apis.data.go.kr/B552584/EvCharger/getChargerStatus?serviceKey=...&period=5&dataType=JSON` | `stat`, `statUpdDt` 확인됨 |
 
 - 상태 코드(`stat`)·충전기 타입(`chgerType`)은 「OpenAPI활용가이드 v1.25」 §3.2·§3.3으로 확정했다(2026-10-24). stat: 0 알수없음, 1 통신이상, 2 충전대기, 3 충전중, 4 운영중지, 5 점검중, 6 예약중, 9 상태미확인. chgerType: 01 DC차데모 … 10 DC콤보+NACS, 11 DC콤보2(버스전용). 결제 수단 필드는 없다. 표는 `config.py`의 `PUBLIC_STAT_MAP`·`CONNECTOR_MAP`.
@@ -851,6 +876,7 @@ sequenceDiagram
 | 표준 AAOS `EV_CHARGE_STATE` 읽기 가능 여부 | 감지 속도 | 가능하면 `VehiclePort.chargeState()` 추가 |
 | Pleos 에뮬레이터에서 Android TTS/STT/Location 동작 | 음성·위치 | 버튼 UI, NaviHelper 위치 이벤트 |
 | ~~공공 API `stat` 코드 의미, `getChargerInfo` 필드~~ | — | ✅ 활용가이드 v1.25 + 서울 실데이터로 확인 (§5.5) |
+| 실차 `getRangeRemainingDistance` 단위(에뮬레이터는 미터) | 가는 길 충전소 | 2,000 미만이면 km로 보는 방어 코드. 실차·설명회 확인 |
 | 차량 앱의 외부 서버 통신에 대한 Pleos 심사 제약 | 서버 구조 | 10/28 설명회에서 질문 |
 | 개인위치정보 관련 법적 절차(실서비스 시) | 사업화 | 좌표 미전송·해시 ID로 최소화, 법률 검토 |
 

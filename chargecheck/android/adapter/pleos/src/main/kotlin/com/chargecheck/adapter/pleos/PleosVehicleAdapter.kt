@@ -18,7 +18,7 @@ private const val TAG = "ChargeCheck/Pleos"
 
 /**
  * Pleos Vehicle SDK로 구동 배터리 SOC를 읽는다. (기획문서/앱구조_명세서_AI용.md §4.14)
- * 권한: pleos.car.permission.CAR_ENERGY.
+ * 권한: pleos.car.permission.CAR_ENERGY(SOC), pleos.car.permission.CAR_DRIVE(남은 주행 가능 거리).
  * 주행 중 여부는 기어가 아니라 CarUxRestrictions로 판단한다(adapter:android의 CarUxRestrictionsAdapter).
  */
 class PleosVehicleAdapter(context: Context, private val clock: ClockPort) : VehiclePort {
@@ -55,6 +55,24 @@ class PleosVehicleAdapter(context: Context, private val clock: ClockPort) : Vehi
 
     /** 목표 충전량을 읽는 API가 Vehicle SDK 2.3.2에는 없다(설정·지원 범위만 있음). ⚠️ */
     override suspend fun chargeTargetPct(): Int? = null
+
+    /**
+     * 남은 주행 가능 거리. SDK 문서에 단위가 없어 Android VHAL(RANGE_REMAINING, 미터)을 따른다.
+     * ⚠️ UNVERIFIED: 실제 차에서 km로 오면 2,000 미만 값이 들어오므로 그대로 km로 본다.
+     */
+    override suspend fun remainingRangeKm(): Double? = suspendCancellableCoroutine { cont ->
+        vehicle.getOdometer().getRangeRemainingDistance(
+            { value ->
+                Log.d(TAG, "남은 주행 가능 거리 원값: $value")
+                val km = value?.toDouble()?.let { if (it >= 2_000) it / 1000 else it }
+                if (cont.isActive) cont.resume(km?.takeIf { it > 0 })
+            },
+            { e ->
+                Log.w(TAG, "남은 주행 가능 거리 읽기 실패", e)
+                if (cont.isActive) cont.resume(null)
+            },
+        )
+    }
 
     fun release() = vehicle.release()
 }

@@ -20,6 +20,8 @@ interface VehiclePort {
     suspend fun currentSoc(): Int?
     /** 목표 충전량(%). 없으면 null. ⚠️ UNVERIFIED: Pleos에서 읽기 API 존재 여부 */
     suspend fun chargeTargetPct(): Int?
+    /** 남은 주행 가능 거리(km). 모르면 null. Pleos: Odometer.getRangeRemainingDistance (권한 CAR_DRIVE) */
+    suspend fun remainingRangeKm(): Double? = null
 }
 
 interface DrivingStatePort {

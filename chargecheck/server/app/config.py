@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     # 공공데이터포털 일반 인증키(디코딩 형태 그대로). 없으면 동기화 작업을 건너뛴다.
     PUBLIC_API_KEY: str = ""
     PUBLIC_API_BASE: str = "https://apis.data.go.kr/B552584/EvCharger"
-    # 동기화할 시·도 코드(행정구역코드 앞 2자리). 11 = 서울. 쉼표로 여러 개.
+    # 동기화할 시·도 코드(행정구역코드 앞 2자리). 11 = 서울. 쉼표로 여러 개. ALL = 전국.
     PUBLIC_ZCODES: str = "11"
     # 기기 ID 해시용 솔트. 운영에서는 반드시 바꾼다.
     DEVICE_SALT: str = "dev-salt-change-me"

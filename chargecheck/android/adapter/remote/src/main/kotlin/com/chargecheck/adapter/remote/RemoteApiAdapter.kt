@@ -6,9 +6,12 @@ import com.chargecheck.core.model.ChargerType
 import com.chargecheck.core.model.DeviceId
 import com.chargecheck.core.model.GeoPoint
 import com.chargecheck.core.model.NearbyStation
+import com.chargecheck.core.model.Place
 import com.chargecheck.core.model.PublicState
 import com.chargecheck.core.model.ReasonCode
 import com.chargecheck.core.model.ReviewTag
+import com.chargecheck.core.model.RouteCandidate
+import com.chargecheck.core.model.RoutePlan
 import com.chargecheck.core.model.Station
 import com.chargecheck.core.model.StationId
 import com.chargecheck.core.model.StationInfo
@@ -64,6 +67,54 @@ class RemoteApiAdapter(
         call("GET", "/v1/stations/nearby?lat=${at.lat}&lon=${at.lon}&radius=$radiusM").map { body ->
             JSONArray(body).objects().map { NearbyStation(station(it), info(it), status(it.getJSONObject("status"))) }
         }
+
+    /** 지역·장소 검색. [near]를 주면 이름이 맞는 충전소를 가까운 순으로 함께 준다. */
+    suspend fun searchPlaces(query: String, near: GeoPoint?): Result<List<Place>> {
+        val at = near?.let { "&lat=${it.lat}&lon=${it.lon}" }.orEmpty()
+        return call("GET", "/v1/places/search?q=${enc(query)}$at").map { body ->
+            JSONArray(body).objects().map {
+                Place(
+                    name = it.getString("name"),
+                    address = it.optString("address"),
+                    location = GeoPoint(it.getDouble("lat"), it.getDouble("lon")),
+                    stationId = if (it.isNull("stationId")) null else StationId(it.getString("stationId")),
+                )
+            }
+        }
+    }
+
+    /** 목적지까지 가는 길의 충전소. 차의 남은 주행 가능 거리·배터리를 주면 갈 수 있는지와 추천 지점이 붙는다. */
+    suspend fun alongRoute(from: GeoPoint, to: Place, rangeKm: Double?, soc: Int?): Result<RoutePlan> {
+        val q = buildString {
+            append("fromLat=${from.lat}&fromLon=${from.lon}&toLat=${to.location.lat}&toLon=${to.location.lon}")
+            rangeKm?.let { append("&rangeKm=$it") }
+            soc?.let { append("&soc=$it") }
+        }
+        return call("GET", "/v1/stations/along-route?$q").map { body ->
+            val o = JSONObject(body)
+            val path = o.getJSONArray("route")
+            RoutePlan(
+                destination = to,
+                routeKm = o.getDouble("routeKm"),
+                roadRoute = o.getString("source") == "ROAD",
+                rangeKm = if (o.isNull("rangeKm")) null else o.getDouble("rangeKm"),
+                soc = soc,
+                needsCharge = o.getBoolean("needsCharge"),
+                path = (0 until path.length()).map { i -> path.getJSONArray(i).let { GeoPoint(it.getDouble(0), it.getDouble(1)) } },
+                candidates = o.getJSONArray("candidates").objects().map {
+                    val s = it.getJSONObject("station")
+                    RouteCandidate(
+                        stop = NearbyStation(station(s), info(s), status(it.getJSONObject("status"))),
+                        alongKm = it.getDouble("alongKm"),
+                        detourM = it.getInt("detourM"),
+                        reachable = it.getBoolean("reachable"),
+                        arrivalSoc = it.intOrNull("arrivalSoc"),
+                    )
+                },
+                recommendedId = if (o.isNull("recommendedId")) null else StationId(o.getString("recommendedId")),
+            )
+        }
+    }
 
     override suspend fun alternatives(id: StationId, at: GeoPoint): Result<List<Pair<Station, StationStatus>>> =
         call("GET", "/v1/stations/${enc(id.value)}/alternatives?lat=${at.lat}&lon=${at.lon}").map { body ->

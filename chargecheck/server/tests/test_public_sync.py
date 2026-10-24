@@ -30,7 +30,8 @@ def test_목록을_여러_페이지_끝까지_읽고_504는_다시_시도한다(
 
     with seeded() as s, httpx.Client(transport=httpx.MockTransport(handler)) as client:
         n_stations, n_chargers = public_sync.sync_info(s, client)
-        assert (n_stations, n_chargers) == (2, 3)
+        assert n_chargers == 3
+        assert n_stations == 7 + 2  # DB 전체 충전소 수(fixture 7곳 + 새로 받은 2곳)
         assert s.get(Station, "T1").charger_type == "FAST"
         assert s.get(Charger, ("T2", "01")).public_stat == "4"
     assert calls[0]["zcode"] == "11" and calls[0]["dataType"] == "JSON"
@@ -62,6 +63,29 @@ def test_자리표시_좌표는_건너뛴다(seeded):
         n_stations, _ = public_sync.upsert_charger_info(s, [bad, good])
         assert n_stations == 1
         assert s.get(Station, "BAD1") is None and s.get(Station, "OK1") is not None
+
+
+def test_전국_ALL이면_지역코드_없이_요청한다(seeded, monkeypatch):
+    monkeypatch.setattr("app.config.settings.PUBLIC_ZCODES", "ALL")
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(dict(request.url.params))
+        return httpx.Response(200, json=page([info_row("N1", "01", chger_type="02"), info_row("N1", "02", chger_type="04")], 2))
+
+    with seeded() as s, httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        public_sync.sync_info(s, client)
+        assert "zcode" not in seen[0]
+        assert s.get(Station, "N1").charger_type == "FAST"  # 완속+급속이 섞이면 급속 충전소
+
+
+def test_페이지에_나뉜_충전소도_급속_여부를_다시_맞춘다(seeded):
+    with seeded() as s:
+        public_sync.upsert_charger_info(s, [info_row("P1", "01", chger_type="02")], refresh_kinds=False)
+        public_sync.upsert_charger_info(s, [info_row("P1", "02", chger_type="04")], refresh_kinds=False)
+        public_sync.refresh_station_kinds(s)
+        s.commit()
+        assert s.get(Station, "P1").charger_type == "FAST"
 
 
 def test_KST_시각을_UTC로_바꾼다():

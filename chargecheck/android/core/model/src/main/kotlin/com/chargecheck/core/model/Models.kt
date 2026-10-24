@@ -65,6 +65,34 @@ data class StationInfo(
 /** 지도 화면 한 줄: 충전소 + 상세 정보 + 판정. */
 data class NearbyStation(val station: Station, val info: StationInfo, val status: StationStatus)
 
+/** 지역·장소 검색 결과. 충전소면 [stationId]가 있다. */
+data class Place(val name: String, val address: String, val location: GeoPoint, val stationId: StationId? = null)
+
+/** 목적지까지 가는 길의 충전소 하나. [alongKm] = 출발점에서 경로를 따라간 거리. */
+data class RouteCandidate(
+    val stop: NearbyStation,
+    val alongKm: Double,
+    val detourM: Int,
+    val reachable: Boolean,
+    val arrivalSoc: Int?,
+)
+
+/**
+ * 목적지까지의 경로와 들를 수 있는 충전소(GET /v1/stations/along-route).
+ * [needsCharge] = 남은 주행 가능 거리(15% 여유)로 목적지까지 못 감. [roadRoute] = false면 직선 근사.
+ */
+data class RoutePlan(
+    val destination: Place,
+    val routeKm: Double,
+    val roadRoute: Boolean,
+    val rangeKm: Double?,
+    val soc: Int?,
+    val needsCharge: Boolean,
+    val path: List<GeoPoint>,
+    val candidates: List<RouteCandidate>,
+    val recommendedId: StationId?,
+)
+
 data class StationStatus(
     val stationId: StationId,
     val verdict: Verdict,

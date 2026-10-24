@@ -46,6 +46,8 @@ class FakeVehicle : VehiclePort {
     override fun soc(): Flow<SocSample> = samples
     override suspend fun currentSoc(): Int? = last
     override suspend fun chargeTargetPct(): Int? = targetPct
+    var rangeKm: Double? = null
+    override suspend fun remainingRangeKm(): Double? = rangeKm
 
     suspend fun emitSoc(sample: SocSample) {
         last = sample.pct

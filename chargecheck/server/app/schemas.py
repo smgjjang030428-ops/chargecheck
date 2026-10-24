@@ -87,6 +87,34 @@ class AlternativeOut(CamelModel):
     distance_m: int
 
 
+class PlaceOut(CamelModel):
+    name: str
+    address: str = ""
+    lat: float
+    lon: float
+    kind: Literal["PLACE", "STATION"]
+    station_id: str | None = None
+
+
+class RouteStationOut(CamelModel):
+    station: StationOut
+    status: StationStatusOut
+    along_km: float          # 출발점에서 경로를 따라간 거리
+    detour_m: int            # 경로에서 벗어난 거리
+    reachable: bool          # 남은 주행 가능 거리 안(15% 여유)
+    arrival_soc: int | None  # 도착 예상 배터리(%)
+
+
+class AlongRouteOut(CamelModel):
+    route_km: float
+    source: Literal["ROAD", "STRAIGHT"]  # 도로 경로 / 경로 서버를 못 써서 직선 근사
+    range_km: float | None
+    needs_charge: bool                   # 남은 거리로 목적지까지 못 감(15% 여유 기준)
+    route: list[tuple[float, float]]     # 지도에 그릴 경로 [(lat, lon)]
+    candidates: list[RouteStationOut]    # 경로 위 충전소(5km 구간마다 가장 좋은 곳)
+    recommended_id: str | None           # 추천 충전 지점
+
+
 class ReviewIn(CamelModel):
     station_id: str
     tags: list[ReviewTag] = Field(min_length=1, max_length=6)
