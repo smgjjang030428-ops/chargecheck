@@ -1,0 +1,20 @@
+# 빌드 결과물·IDE 설정
+build/
+.gradle/
+.kotlin/
+.idea/
+*.iml
+captures/
+.DS_Store
+Thumbs.db
+
+# 비밀값: Pleos 클라이언트 시크릿, 공공 API 키, 서명 키는 절대 올리지 않는다
+local.properties
+secrets.properties
+*.jks
+*.keystore
+.env
+
+# 서버(M2) 대비
+__pycache__/
+.venv/

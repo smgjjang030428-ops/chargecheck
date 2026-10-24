@@ -1,0 +1,7 @@
+* text=auto
+# Mac·Linux에서 실행되도록 gradlew는 항상 LF, bat는 CRLF
+gradlew text eol=lf
+*.bat text eol=crlf
+*.jar binary
+*.pdf binary
+*.apk binary

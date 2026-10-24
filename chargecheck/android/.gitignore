@@ -1,0 +1,10 @@
+.gradle/
+build/
+local.properties
+.idea/
+*.iml
+.DS_Store
+captures/
+.kotlin/
+# 비밀값: Pleos 클라이언트 시크릿, 공공 API 키 등은 local.properties나 환경변수에만 둔다
+secrets.properties
