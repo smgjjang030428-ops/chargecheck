@@ -18,3 +18,7 @@ secrets.properties
 # 서버(M2) 대비
 __pycache__/
 .venv/
+
+# 로컬 SQLite
+*.db
+.pytest_cache/
