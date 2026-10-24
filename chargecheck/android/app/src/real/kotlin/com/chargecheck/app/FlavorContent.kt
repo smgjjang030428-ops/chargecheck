@@ -30,6 +30,7 @@ import com.chargecheck.feature.session.ChargeSessionMachine
 import com.chargecheck.feature.session.SessionCoordinator
 import com.chargecheck.feature.session.SessionInput
 import com.chargecheck.feature.session.SessionState
+import com.chargecheck.feature.session.stationId
 import com.chargecheck.feature.warning.ArrivalWarningCoordinator
 import com.chargecheck.feature.warning.reasonText
 import com.chargecheck.ui.MapStation
@@ -66,7 +67,7 @@ private class RealGraph(context: Context) {
     /** 서버에서 받은 주변 충전소와 판정. 지도와 충전소 판별(resolve)이 같이 쓴다. */
     val stations = MutableStateFlow<List<NearbyStation>>(emptyList())
 
-    /** 디버그 빌드는 에뮬레이터 확인용으로 판정 시간을 줄인다(정차 30초, 급속 정체 2분). */
+    /** 디버그 빌드는 에뮬레이터 확인용으로 판정 시간을 줄인다(정차 30초, 급속 정체 2분, 출발 확인 20초). */
     val devTools = (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
     private val config = if (devTools) {
         ChargeCheckConfig(
@@ -75,6 +76,7 @@ private class RealGraph(context: Context) {
             stallTimeoutSlow = Duration.ofMinutes(3),
             waitExtension = Duration.ofMinutes(1),
             retroMinElapsed = Duration.ofMinutes(2),
+            attemptMinStop = Duration.ofSeconds(20),
         )
     } else {
         ChargeCheckConfig.DEFAULT
@@ -96,6 +98,7 @@ private class RealGraph(context: Context) {
         api = api,
         clock = clock,
         resolveStation = resolve,
+        parked = drivingState.isParked(),
     )
     val warning = ArrivalWarningCoordinator(navi, api, navi, resolve, log = session::note)
 
@@ -187,6 +190,7 @@ fun FlavorContent() {
     val stations by graph.stations.collectAsState()
     val parked by remember { graph.drivingState.isParked() }.collectAsState(initial = true)
     val car by remember { graph.navi.locations() }.collectAsState(initial = null)
+    val confirm by graph.session.confirm.collectAsState()
 
     // 경로를 보고 있으면 경로 위 충전소를, 아니면 주변 충전소를 지도에 찍는다
     val shown = plan?.let { p ->
@@ -271,5 +275,17 @@ fun FlavorContent() {
             scope.launch { graph.go(p, id) }
         },
         onRouteClose = { plan = null; selected = null; search = SearchUi() },
+        confirm = confirm,
+        onConfirm = { yes -> scope.launch { graph.session.answerConfirm(yes) } },
+        // 지금 세션의 충전소이거나, 차가 150m 안에 있을 때만(현장에 있었던 차만 표시)
+        canReport = { id ->
+            state.stationId()?.value == id ||
+                shown.firstOrNull { it.id == id }?.let { s -> car?.let { it.distanceMetersTo(s.location) <= 150 } } == true
+        },
+        onReportFail = { id ->
+            val s = stations.firstOrNull { it.station.id.value == id }?.station
+            selected = null
+            if (s != null) scope.launch { graph.session.reportFail(s); graph.refreshStations() }
+        },
     )
 }

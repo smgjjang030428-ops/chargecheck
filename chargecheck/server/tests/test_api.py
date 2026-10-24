@@ -124,3 +124,15 @@ def test_리뷰_태그가_상태에_나온다(client):
     client.post("/v1/reviews", json={"stationId": "ME000001", "tags": ["CABLE_SHORT", "HAS_ROOF"]}, headers=headers())
     st = client.get("/v1/stations/ME000001/status").json()
     assert set(st["topTags"]) == {"CABLE_SHORT", "HAS_ROOF"}
+
+
+def test_직접_표시한_실패_MANUAL도_실패로_센다(client):
+    body = {**event("FAIL", station="ME000003"), "mode": "MANUAL", "minutes": 0}
+    assert client.post("/v1/events", json=body, headers=headers()).status_code == 202
+    st = client.get("/v1/stations/ME000003/status").json()
+    assert st["recentFailCount"] == 1
+
+
+def test_모르는_모드는_거절(client):
+    body = {**event("FAIL"), "mode": "GUESS"}
+    assert client.post("/v1/events", json=body, headers=headers()).status_code == 422

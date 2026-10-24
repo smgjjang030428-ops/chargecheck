@@ -64,6 +64,9 @@ interface ChargeCheckApiPort {
     suspend fun postReview(stationId: StationId, tags: List<ReviewTag>): Result<Unit>
 }
 
+/** 서버가 같은 기기·충전소 2시간 안 기록이라 받지 않았을 때(accepted=false, reason=DUPLICATE). */
+class DuplicateEventException : IllegalStateException("DUPLICATE")
+
 interface ClockPort {
     fun now(): Instant
 }

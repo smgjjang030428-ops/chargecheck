@@ -15,6 +15,7 @@ import com.chargecheck.feature.session.SessionInput.Answer
 import com.chargecheck.feature.session.SessionInput.AppResumed
 import com.chargecheck.feature.session.SessionInput.AppStopped
 import com.chargecheck.feature.session.SessionInput.Arrived
+import com.chargecheck.feature.session.SessionInput.Departing
 import com.chargecheck.feature.session.SessionInput.Moved
 import com.chargecheck.feature.session.SessionInput.ReviewDone
 import com.chargecheck.feature.session.SessionInput.RouteTargetIsStation
@@ -44,12 +45,26 @@ import java.time.Instant
  * - SUCCESS는 자동으로, FAIL은 운전자 확인(YES) 뒤에만 업로드한다.
  * - 무응답은 절대 FAIL로 기록하지 않는다.
  * - 한 세션에서 SUCCESS는 한 번만 업로드한다(snap.successSent).
+ * - 잔량 변화 없이 충전소를 떠나면 세션을 그냥 지우지 않고 [Effect.ConfirmLater]로 운전자 확인을 맡긴다(T22~T25).
  */
 class ChargeSessionMachine(
     private val deviceId: DeviceId,
     private val ids: IdFactory,
-    private val cfg: ChargeCheckConfig = ChargeCheckConfig.DEFAULT,
+    internal val cfg: ChargeCheckConfig = ChargeCheckConfig.DEFAULT,
 ) {
+
+    /** 운전자가 상세 카드에서 직접 [여기 충전 안 됐어요]를 누른 기록(F2 보조). 현장에 있었는지는 호출하는 쪽이 확인한다. */
+    fun manualFail(station: Station, soc: Int?, at: Instant) = ChargeEvent(
+        eventId = ids.newEventId(),
+        deviceId = deviceId,
+        stationId = station.id,
+        result = ChargeResult.FAIL,
+        mode = DetectMode.MANUAL,
+        socStart = soc ?: 0,
+        socEnd = soc ?: 0,
+        minutes = 0,
+        occurredAt = at,
+    )
 
     fun reduce(state: SessionState, input: SessionInput): Transition = when (state) {
         Idle -> onIdle(input)
@@ -93,6 +108,14 @@ class ChargeSessionMachine(
             }
         }
         is Moved -> if (input.distanceFromStationM > cfg.onsiteRadiusM) Transition(Idle) else stay(state) // T4
+        is Departing -> { // T23: 세션 시작(onsiteMinStop) 전에 출발. attemptMinStop 넘게 있었으면 꽂아 보고 떠났을 수 있다
+            val soc = state.lastSoc
+            if (soc != null && Duration.between(state.stoppedAt, input.at) >= cfg.attemptMinStop) {
+                Transition(Idle, listOf(confirm(snapshot(state.station, state.stoppedAt, soc), DetectMode.LIVE, soc.pct, input.at)))
+            } else {
+                Transition(Idle)
+            }
+        }
         AppStopped -> Transition(Idle)
         else -> stay(state)
     }
@@ -111,7 +134,8 @@ class ChargeSessionMachine(
                 stay(state)
             }
         AppStopped -> Transition(Suspended(state.snap)) // T10
-        is Moved -> leftWithoutResult(state, input) // T22
+        is Departing -> departedWithoutCharge(state.snap, DetectMode.LIVE, state.lastSoc.pct, input.at) // T24
+        is Moved -> leftWithoutResult(state, state.snap, DetectMode.LIVE, state.lastSoc.pct, input) // T22
         else -> stay(state)
     }
 
@@ -133,7 +157,9 @@ class ChargeSessionMachine(
         }
         is Soc -> if (isLiveSuccess(state.snap, input.sample)) liveSuccess(state.snap, input.sample) else stay(state) // T21
         AppStopped -> Transition(Suspended(state.snap)) // T10
-        is Moved -> leftWithoutResult(state, input) // T22
+        // T24: 답하지 않고 출발 → 질문을 주행 화면 확인 카드로 넘긴다
+        is Departing -> departedWithoutCharge(state.snap, DetectMode.LIVE, state.lastSoc.pct, input.at)
+        is Moved -> leftWithoutResult(state, state.snap, DetectMode.LIVE, state.lastSoc.pct, input) // T22
         else -> stay(state)
     }
 
@@ -214,8 +240,9 @@ class ChargeSessionMachine(
             } else {
                 Transition(Idle, listOf(Effect.ClearSnapshot)) // T15
             }
-        is Moved ->
-            if (input.distanceFromStationM > cfg.leftRadiusM) Transition(Idle, listOf(Effect.ClearSnapshot)) else stay(state)
+        // T25: 재시동 때 질문이 떴는데 답하지 않고 출발 → 확인 카드로 넘긴다
+        is Departing -> departedWithoutCharge(state.snap, DetectMode.RETRO, state.currentSoc, input.at)
+        is Moved -> leftWithoutResult(state, state.snap, DetectMode.RETRO, state.currentSoc, input)
         else -> stay(state)
     }
 
@@ -231,15 +258,17 @@ class ChargeSessionMachine(
     private fun startCandidate(station: Station, at: Instant) =
         Transition(Candidate(station, at), listOf(Effect.ScheduleTick(at + cfg.onsiteMinStop)))
 
+    private fun snapshot(station: Station, arrivedAt: Instant, soc: SocSample) = ArrivalSnapshot(
+        stationId = station.id,
+        stationName = station.name,
+        chargerType = station.chargerType,
+        soc = soc.pct,
+        at = arrivedAt,
+        location = station.location,
+    )
+
     private fun startMonitoring(station: Station, arrivedAt: Instant, soc: SocSample, now: Instant): Transition {
-        val snap = ArrivalSnapshot(
-            stationId = station.id,
-            stationName = station.name,
-            chargerType = station.chargerType,
-            soc = soc.pct,
-            at = arrivedAt,
-            location = station.location,
-        )
+        val snap = snapshot(station, arrivedAt, soc)
         val deadline = now + cfg.stallTimeout(station.chargerType)
         return Transition(
             Monitoring(snap, soc, deadline),
@@ -267,8 +296,31 @@ class ChargeSessionMachine(
         )
     }
 
-    private fun leftWithoutResult(state: SessionState, input: Moved): Transition =
-        if (input.distanceFromStationM > cfg.leftRadiusM) Transition(Idle, listOf(Effect.ClearSnapshot)) else stay(state)
+    /** 미리 만든 FAIL 기록을 운전자 확인에 맡긴다. YES일 때만 SessionCoordinator가 올린다. */
+    private fun confirm(snap: ArrivalSnapshot, mode: DetectMode, socEnd: Int, at: Instant) =
+        Effect.ConfirmLater(event(snap, ChargeResult.FAIL, mode, socEnd, at), snap.stationName)
+
+    /**
+     * 잔량이 오르지 않은 채 출발. Monitoring·Asking·AskingRetro는 이미 onsiteMinStop(5분)을 채운 상태라
+     * 항상 '꽂아 봤는데 안 됨'일 수 있으므로 확인을 맡긴다.
+     */
+    private fun departedWithoutCharge(snap: ArrivalSnapshot, mode: DetectMode, socEnd: Int, at: Instant) =
+        Transition(Idle, listOf(Effect.ClearSnapshot, confirm(snap, mode, socEnd, at)))
+
+    /** T22: 주행 신호(Departing) 없이 위치로만 떠난 걸 알았을 때의 대비. 떠난 시각은 몰라서 마지막 잔량 시각을 쓴다. */
+    private fun leftWithoutResult(state: SessionState, snap: ArrivalSnapshot, mode: DetectMode, socEnd: Int, input: Moved): Transition =
+        if (input.distanceFromStationM > cfg.leftRadiusM) {
+            departedWithoutCharge(snap, mode, socEnd, lastSeen(state) ?: snap.at)
+        } else {
+            stay(state)
+        }
+
+    private fun lastSeen(state: SessionState): Instant? = when (state) {
+        is Monitoring -> state.lastSoc.at
+        is Asking -> state.lastSoc.at
+        is AskingRetro -> state.resumedAt
+        else -> null
+    }
 
     private fun leave(snap: ArrivalSnapshot, result: ChargeResult, input: Moved): Transition? =
         if (input.distanceFromStationM > cfg.leftRadiusM) {

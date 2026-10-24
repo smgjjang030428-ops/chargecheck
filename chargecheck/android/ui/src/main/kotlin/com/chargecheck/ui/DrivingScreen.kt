@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.chargecheck.core.model.Verdict
 import com.chargecheck.core.port.VoiceIntent
+import com.chargecheck.feature.session.FailConfirm
 import com.chargecheck.feature.session.SessionState
 import com.chargecheck.feature.session.label
 
@@ -42,12 +43,16 @@ private val DrivingBody = 28.sp
  * - 버튼은 최대 2개, 높이 96dp 이상. 지도·목록·스크롤·애니메이션·키보드 없음.
  * - 한 줄 글자 수를 짧게 유지하고 넘치면 자른다(UX_RESTRICTIONS_LIMIT_STRING_LENGTH 대비).
  * - "충전이 안 되나요?" 질문은 주행 중에 띄우지 않는다. 정차하면 AskSheet로 다시 보인다.
+ * - 예외: 충전소에서 잔량 변화 없이 막 출발했을 때의 확인([confirm])은 출발 직후 잠깐(45초) 버튼 2개로 묻는다.
+ *   못 누르면 숨겼다가 다음 주차 때 다시 묻는다. 경고가 있으면 경고가 먼저다.
  */
 @Composable
 fun DrivingScreen(
     state: SessionState,
     warning: WarningUi?,
     onWarningChoice: (VoiceIntent) -> Unit,
+    confirm: FailConfirm? = null,
+    onConfirm: (Boolean) -> Unit = {},
 ) {
     Box(Modifier.fillMaxSize().background(Bg).padding(32.dp)) {
         Text(
@@ -59,6 +64,8 @@ fun DrivingScreen(
         Column(Modifier.align(Alignment.Center).fillMaxWidth(0.85f)) {
             if (warning != null) {
                 DrivingWarning(warning, onWarningChoice)
+            } else if (confirm != null && confirm.visible) {
+                DrivingConfirm(confirm, onConfirm)
             } else {
                 DrivingStatus(state)
             }
@@ -88,6 +95,31 @@ private fun DrivingStatus(state: SessionState) {
     if (station != null) {
         Spacer(Modifier.height(16.dp))
         Text(station, color = TextSub, fontSize = DrivingBody, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+/** "충전이 안 됐나요?" 출발 직후 확인. [안 됐어요]만 기록되고, [아니요]·무응답은 기록하지 않는다. */
+@Composable
+private fun DrivingConfirm(confirm: FailConfirm, onConfirm: (Boolean) -> Unit) {
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(Panel).padding(36.dp)) {
+        Text("충전이 안 됐나요?", color = TextMain, fontSize = DrivingTitle, fontWeight = FontWeight.Bold, maxLines = 1)
+        Spacer(Modifier.height(12.dp))
+        Text(confirm.stationName, color = TextSub, fontSize = DrivingBody, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Spacer(Modifier.height(32.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+            Button(
+                onClick = { onConfirm(true) },
+                modifier = Modifier.weight(1f).heightIn(min = DrivingButtonHeight),
+                shape = RoundedCornerShape(18.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Red, contentColor = Color.White),
+            ) { Text("안 됐어요", fontSize = DrivingBody, fontWeight = FontWeight.Bold) }
+            Button(
+                onClick = { onConfirm(false) },
+                modifier = Modifier.weight(1f).heightIn(min = DrivingButtonHeight),
+                shape = RoundedCornerShape(18.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3A3D41), contentColor = TextMain),
+            ) { Text("아니요", fontSize = DrivingBody, fontWeight = FontWeight.Bold) }
+        }
     }
 }
 

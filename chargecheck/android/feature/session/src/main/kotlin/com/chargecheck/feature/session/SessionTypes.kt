@@ -83,6 +83,9 @@ sealed interface SessionInput {
 
     data class TargetReached(val pct: Int) : SessionInput
 
+    /** 주차 → 주행으로 바뀜(기어를 P에서 뺌). 충전소에서 잔량 변화 없이 출발하는지 보려고 쓴다. */
+    data class Departing(val at: Instant) : SessionInput
+
     /** 리뷰를 마치거나 건너뜀. */
     data object ReviewDone : SessionInput
 }
@@ -98,6 +101,13 @@ sealed interface Effect {
     data class ScheduleTick(val at: Instant) : Effect
     data object NotifyComplete : Effect
     data class OfferReview(val stationId: StationId) : Effect
+
+    /**
+     * 충전소에서 잔량 변화 없이 떠남 → "충전이 안 됐나요?"를 운전자에게 확인한다.
+     * [event]는 미리 만든 FAIL 기록이고, 운전자가 YES라고 할 때만 올린다(무응답은 기록하지 않음).
+     * 세션과 따로 SessionCoordinator가 들고 있다가, 출발 직후(주행 화면)와 다음 주차 때 한 번씩 묻는다.
+     */
+    data class ConfirmLater(val event: ChargeEvent, val stationName: String) : Effect
 }
 
 data class Transition(val state: SessionState, val effects: List<Effect> = emptyList())

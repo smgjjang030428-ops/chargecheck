@@ -46,6 +46,7 @@ import com.chargecheck.core.model.distanceMetersTo
 import com.chargecheck.core.port.VoiceIntent
 import com.chargecheck.feature.session.ChargerPick
 import com.chargecheck.feature.session.Effect
+import com.chargecheck.feature.session.FailConfirm
 import com.chargecheck.feature.session.LogEntry
 import com.chargecheck.feature.session.SessionState
 import org.osmdroid.config.Configuration
@@ -103,9 +104,13 @@ fun StationMapScreen(
     plan: RoutePlan? = null,
     onRouteGo: (String?) -> Unit = {},
     onRouteClose: () -> Unit = {},
+    confirm: FailConfirm? = null,
+    onConfirm: (Boolean) -> Unit = {},
+    canReport: (String) -> Boolean = { false },
+    onReportFail: (String) -> Unit = {},
 ) {
     if (!parked) {
-        DrivingScreen(state, warning, onWarningChoice)
+        DrivingScreen(state, warning, onWarningChoice, confirm, onConfirm)
         return
     }
     Box(Modifier.fillMaxSize().background(Bg).padding(24.dp)) {
@@ -115,7 +120,8 @@ fun StationMapScreen(
                 MapLegend(Modifier.align(Alignment.BottomStart).padding(16.dp))
                 stations.firstOrNull { it.id == selectedId }?.let { s ->
                     val label = if (plan != null) "들렀다 가기" else "여기로 안내"
-                    StationCard(Modifier.align(Alignment.BottomCenter).padding(16.dp), s, label, onNavigate, { onSelect(null) })
+                    val report = if (plan == null && canReport(s.id)) onReportFail else null
+                    StationCard(Modifier.align(Alignment.BottomCenter).padding(16.dp), s, label, onNavigate, { onSelect(null) }, report)
                 }
                 SearchBox(Modifier.align(Alignment.TopStart).padding(16.dp), search, onQueryChange, onSearch, onPickPlace)
             }
@@ -137,6 +143,9 @@ fun StationMapScreen(
         if (warning != null) WarningCard(Modifier.align(Alignment.TopCenter).padding(top = 40.dp), warning, onWarningChoice)
         if (question != null) {
             AskSheet(Modifier.align(Alignment.BottomCenter), question, onAnswer)
+        } else if (confirm != null && confirm.visible) {
+            // 출발할 때 못 받은 "충전이 안 됐나요?"를 주차하면 다시 묻는다
+            AskSheet(Modifier.align(Alignment.BottomCenter), Effect.Ask(confirm.question, retro = true)) { onConfirm(it == VoiceIntent.YES) }
         } else if (chargerPick != null) {
             ChargerPickSheet(Modifier.align(Alignment.BottomCenter), chargerPick, onPickCharger)
         }
@@ -247,7 +256,14 @@ private fun MapLegend(modifier: Modifier) {
  * 결제 수단은 공공 데이터에 없으므로 지어내지 않고 운영사 연락처로 안내한다.
  */
 @Composable
-private fun StationCard(modifier: Modifier, s: MapStation, navigateLabel: String, onNavigate: (String) -> Unit, onClose: () -> Unit) {
+private fun StationCard(
+    modifier: Modifier,
+    s: MapStation,
+    navigateLabel: String,
+    onNavigate: (String) -> Unit,
+    onClose: () -> Unit,
+    onReportFail: ((String) -> Unit)? = null,
+) {
     Column(
         modifier.fillMaxWidth(0.94f).heightIn(max = 620.dp).clip(RoundedCornerShape(20.dp)).background(Panel).padding(24.dp),
     ) {
@@ -283,6 +299,12 @@ private fun StationCard(modifier: Modifier, s: MapStation, navigateLabel: String
             ) { Text(navigateLabel, fontSize = 22.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 6.dp)) }
             OutlinedButton(onClick = onClose, shape = RoundedCornerShape(14.dp)) {
                 Text("닫기", color = TextMain, fontSize = 22.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 6.dp))
+            }
+            // 현장(지금 세션의 충전소이거나 150m 안)에서만 보인다. 허위 기록을 막기 위해서다.
+            if (onReportFail != null) {
+                OutlinedButton(onClick = { onReportFail(s.id) }, shape = RoundedCornerShape(14.dp)) {
+                    Text("여기 충전 안 됐어요", color = Red, fontSize = 22.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp))
+                }
             }
         }
     }

@@ -18,6 +18,7 @@ import com.chargecheck.core.model.StationInfo
 import com.chargecheck.core.model.StationStatus
 import com.chargecheck.core.model.Verdict
 import com.chargecheck.core.port.ChargeCheckApiPort
+import com.chargecheck.core.port.DuplicateEventException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -49,7 +50,10 @@ class RemoteApiAdapter(
         put("minutes", event.minutes)
         put("occurredAt", event.occurredAt.toString())
         event.chargerId?.let { put("chargerId", it) }
-    }).map { }
+    }).mapCatching { body ->
+        // 같은 기기·충전소 2시간 안 기록은 200 {"accepted": false}로 온다
+        if (body.isNotBlank() && !JSONObject(body).optBoolean("accepted", true)) throw DuplicateEventException()
+    }
 
     override suspend fun attachCharger(eventId: String, chargerId: String): Result<Unit> =
         call("PATCH", "/v1/events/${enc(eventId)}", JSONObject().put("chargerId", chargerId)).map { }

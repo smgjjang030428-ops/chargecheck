@@ -188,7 +188,7 @@ enum class ReasonCode {
 }
 
 enum class ChargeResult { SUCCESS, FAIL }
-enum class DetectMode { LIVE, RETRO }
+enum class DetectMode { LIVE, RETRO, MANUAL }  // MANUAL = 상세 카드에서 운전자가 직접 표시
 
 data class ChargeEvent(
     val eventId: String,                // UUID, 서버 멱등성 키
@@ -286,6 +286,9 @@ data class ChargeCheckConfig(
     val waitExtension: Duration = Duration.ofMinutes(10),     // "아직 연결 중" 답하면 연장
     val retroMinElapsed: Duration = Duration.ofMinutes(15),   // RETRO 실패 질문 최소 경과
     val retroMaxElapsed: Duration = Duration.ofHours(24),     // 이보다 오래되면 스냅샷 폐기
+    val attemptMinStop: Duration = Duration.ofMinutes(2),     // 이만큼 머물다 잔량 변화 없이 출발하면 실패 확인(T23)
+    val confirmWindow: Duration = Duration.ofHours(2),        // 출발 때 못 받은 확인을 다음 주차 때 다시 물을 수 있는 시간
+    val confirmDrivingShow: Duration = Duration.ofSeconds(45),// 주행 화면 확인 카드 표시 시간
     val socRetryInterval: Duration = Duration.ofMinutes(1),   // SOC 미확인 시 재확인 간격
     val askTimeoutSec: Int = 8,
     val dedupWindow: Duration = Duration.ofHours(2),      // 서버와 동일
@@ -418,7 +421,18 @@ class ChargeSessionMachine(
 | T19 | Ended | ReviewDone (또는 다른 입력) | — | Idle (다른 입력이면 Idle에서 이어서 처리) | ClearSnapshot |
 | T20 | Suspended | AppResumed | snap.successSent = true | Charging | Upload 없음 — 같은 세션에서 두 번째 SUCCESS 금지 |
 | T21 | Asking | Soc | pct ≥ snap.soc + 1 | Charging | T5와 같음 (질문 중 충전 시작) |
-| T22 | Monitoring/Asking | Moved | > 150m | Idle | ClearSnapshot (결과 없이 떠남, 기록 안 함) |
+| T22 | Monitoring/Asking/AskingRetro | Moved | > 150m (Departing을 못 받은 경우의 대비) | Idle | ClearSnapshot, **ConfirmLater**(FAIL 기록을 운전자 확인에 맡김) |
+| T23 | Candidate | Departing | 정차 ≥ `attemptMinStop`(2분), SOC 읽음 | Idle | ConfirmLater(LIVE). 더 짧거나 SOC 모름 → 그냥 Idle |
+| T24 | Monitoring/Asking | Departing | — (이미 5분 정차를 채움) | Idle | ClearSnapshot, ConfirmLater(LIVE) |
+| T25 | AskingRetro | Departing | — | Idle | ClearSnapshot, ConfirmLater(RETRO) |
+
+**잔량 변화 없이 출발했을 때의 실패 확인 (2026-10-25 추가)**
+꽂았는데 안 돼서 몇 분 만에 다시 출발하는 경우가 가장 흔한데, 예전 설계는 질문(급속 10분, RETRO 15분)이 뜨기 전에 떠나면 기록 없이 지웠다. 이제는 다음처럼 확인한다. 원칙(FAIL은 운전자 YES 뒤에만, 무응답은 기록 안 함)은 그대로다.
+1. `Departing` = 주차 → 주행(`DrivingStatePort.isParked()` true → false). 차는 아직 서 있으므로 물어도 안전하다.
+2. 상태 머신은 FAIL `ChargeEvent`를 미리 만들어 `Effect.ConfirmLater(event, stationName)`로 넘기고 세션은 Idle로 끝낸다(새 충전소 세션이 바로 시작될 수 있도록 세션과 분리).
+3. `SessionCoordinator.confirm`(`FailConfirm`)이 들고 있다가: 출발 직후 `DrivingScreen`에 "충전이 안 됐나요? [안 됐어요] [아니요]"를 45초 → 못 누르면 숨기고, 다음 주차(2시간 안)에 `AskSheet`로 "아까 ○○에서 충전이 안 됐나요?"를 한 번 더 → 그래도 답 없이 출발하거나 2시간이 지나면 버린다.
+4. [안 됐어요]/[응]이면 그 기록을 올리고, 충전기가 2대 이상이면 "몇 번 충전기였나요?"로 이어진다.
+5. 상세 카드 **[여기 충전 안 됐어요]**(mode=MANUAL): 지금 세션의 충전소이거나 차가 150m 안에 있을 때만 보인다(허위 기록 방지). 같은 기기·충전소 2시간 중복은 서버가 받지 않고(`accepted: false`) 앱은 "2시간 안에 이미 기록됨"으로 남긴다.
 
 `SessionCoordinator`(Android 쪽)는 포트의 Flow를 `SessionInput`으로 바꿔 `reduce`에 넣고, 나온 `Effect`를 실행한다. 상태는 `StateFlow<SessionState>`로 UI에 노출한다.
 
@@ -462,7 +476,8 @@ sequenceDiagram
 | `HomeScreen` | 앱 열기 | 제한(읽기만) | 차 일러스트 + 상태 한 줄, 목적지 충전소 카드, 최근 기록 3개 |
 | `WarningCard` | F3 | ○ (버튼 2개) | 상태 배지, 충전소 이름, 이유 한 줄, [근처 충전소로 바꾸기] [그대로] |
 | `ChargingScreen` | Monitoring/Charging | ✕(주차 전용) | SOC 막대, 10분당 상승폭, "정상 1건 기록" 토스트 |
-| `AskSheet` | Asking/AskingRetro | ✕(주차 전용) | 질문 + [응, 안 돼요] [아직 연결 중] / 과거형 [응] [아니요] |
+| `AskSheet` | Asking/AskingRetro, 다음 주차 때의 실패 확인 | ✕(주차 전용) | 질문 + [응, 안 돼요] [아직 연결 중] / 과거형 [응] [아니요] |
+| 주행 화면 확인 카드 | 잔량 변화 없이 출발 직후 45초 | ○ (버튼 2개) | "충전이 안 됐나요?" + 충전소 이름, [안 됐어요] [아니요] (경고가 있으면 경고가 먼저) |
 | `ReviewSheet` | Ended + 주차 | ✕ | 태그 칩 6개, 건너뛰기 |
 | `DevMenuScreen` | demo flavor | ✕ | 시나리오 목록, 재생/정지, 시간 배속 |
 | `StationMapScreen` | real flavor, 주차 중 | ✕(주차 전용) | 주변 충전소 지도(우리 판정 색 핀), 핀 → 상세 카드 → [여기로 안내](`NaviPort.setDestination`) |
@@ -483,7 +498,7 @@ sequenceDiagram
   - DO(Distraction Optimization)를 선언하지 않은 앱은 주행 중 Pleos가 화면 전체를 "주행 중에는 사용할 수 없습니다"로 막는다(Pleos 「지역별 주행 규제 정책」: DO 미선언 시 Drive = 사용 불가).
   - `MainActivity`에 `<meta-data android:name="distractionOptimized" android:value="true" />`를 넣으면 에뮬레이터에서 D 기어에도 우리 화면이 보인다(car_service `DO: true`, UxR 80 = NO_SETUP 64 + NO_VIDEO 16).
   - 주행 여부는 기어가 아니라 Pleos 「주행 규제 개발 가이드」대로 `CarUxRestrictionsManager`(`isRequiresDistractionOptimization`)로 판단한다 → `adapter:android`의 `CarUxRestrictionsAdapter`(`useLibrary("android.car")`).
-  - 주행 중에는 `DrivingScreen`만 보인다: 한 번에 정보 하나(경고가 있으면 경고, 없으면 상태 한 줄), 버튼 최대 2개·높이 96dp·글자 28~40sp, 지도·목록·스크롤·애니메이션·키보드 없음, 긴 글은 한 줄로 자름. "충전이 안 되나요?" 질문은 주행 중 띄우지 않고 정차 후 AskSheet로 보인다.
+  - 주행 중에는 `DrivingScreen`만 보인다: 한 번에 정보 하나(경고가 있으면 경고, 없으면 상태 한 줄), 버튼 최대 2개·높이 96dp·글자 28~40sp, 지도·목록·스크롤·애니메이션·키보드 없음, 긴 글은 한 줄로 자름. "충전이 안 되나요?" 질문은 주행 중 띄우지 않고 정차 후 AskSheet로 보인다. 예외는 출발 직후 실패 확인 카드(45초, 버튼 2개, §4.7 T23~T25).
   - 주행 중 [바꾸기]를 누르면 `addWaypoint`가 실행되고 Pleos 내비가 앞으로 나와 새 경로를 안내한다(확인).
   - 근거: Pleos 「앱 카테고리」에서 **Mobility Services** 카테고리는 주행 중 "전기차 충전소 찾기 및 경유지 설정"을 제한적으로 허용할 수 있다고 명시. 우리 Pleos 프로젝트 카테고리는 지금 "지도/내비게이션"이므로 **Mobility Services로 바꾸는 것을 검토**한다.
   - ⚠️ 실제 출시 차량에서도 개발 빌드의 DO 선언이 그대로 인정되는지, 심사 조건이 무엇인지는 10/28 설명회에서 확인한다.
@@ -637,7 +652,7 @@ server/
   "eventId": "6f1c...-uuid",
   "stationId": "ME000001",
   "result": "SUCCESS",
-  "mode": "LIVE",
+  "mode": "LIVE",              // LIVE / RETRO / MANUAL(상세 카드에서 직접 표시)
   "socStart": 42,
   "socEnd": 47,
   "minutes": 6,

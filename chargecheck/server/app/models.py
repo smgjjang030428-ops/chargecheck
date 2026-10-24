@@ -42,7 +42,7 @@ class ChargeEvent(Base):
     stat_id: Mapped[str] = mapped_column(String, index=True)
     chger_id: Mapped[str | None] = mapped_column(String, nullable=True)
     result: Mapped[str] = mapped_column(String)   # SUCCESS / FAIL
-    mode: Mapped[str] = mapped_column(String)     # LIVE / RETRO
+    mode: Mapped[str] = mapped_column(String)     # LIVE / RETRO / MANUAL
     soc_start: Mapped[int] = mapped_column(Integer)
     soc_end: Mapped[int] = mapped_column(Integer)
     minutes: Mapped[int] = mapped_column(Integer)

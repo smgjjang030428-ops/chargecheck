@@ -18,7 +18,7 @@ class ChargeEventIn(CamelModel):
     event_id: str = Field(min_length=8, max_length=64)
     station_id: str
     result: Literal["SUCCESS", "FAIL"]
-    mode: Literal["LIVE", "RETRO"]
+    mode: Literal["LIVE", "RETRO", "MANUAL"]  # MANUAL = 상세 카드에서 운전자가 직접 표시
     soc_start: int = Field(ge=0, le=100)
     soc_end: int = Field(ge=0, le=100)
     minutes: int = Field(ge=0)

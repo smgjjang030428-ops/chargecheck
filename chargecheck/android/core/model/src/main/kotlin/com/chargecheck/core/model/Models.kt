@@ -113,7 +113,8 @@ data class StationStatus(
 
 enum class ChargeResult { SUCCESS, FAIL }
 
-enum class DetectMode { LIVE, RETRO }
+/** LIVE = 현장에서 실시간, RETRO = 재시동 때 비교, MANUAL = 운전자가 상세 카드에서 직접 표시. */
+enum class DetectMode { LIVE, RETRO, MANUAL }
 
 /** 서버로 보내는 충전 결과 1건. eventId는 서버 멱등성 키. */
 data class ChargeEvent(

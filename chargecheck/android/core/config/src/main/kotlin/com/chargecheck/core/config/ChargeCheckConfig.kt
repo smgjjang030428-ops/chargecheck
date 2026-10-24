@@ -26,6 +26,12 @@ data class ChargeCheckConfig(
     val waitExtension: Duration = Duration.ofMinutes(10),
     /** RETRO 실패 질문을 하려면 최소 경과 시간. */
     val retroMinElapsed: Duration = Duration.ofMinutes(15),
+    /** 이만큼 머물렀다가 잔량 변화 없이 출발하면 '꽂아 봤는데 안 됨'일 수 있어 확인한다. 더 짧으면 그냥 들른 것으로 본다. */
+    val attemptMinStop: Duration = Duration.ofMinutes(2),
+    /** 출발할 때 못 받은 실패 확인을 다음 주차 때 다시 물을 수 있는 시간. */
+    val confirmWindow: Duration = Duration.ofHours(2),
+    /** 주행 중 확인 카드를 보여주는 시간. 지나면 숨기고 다음 주차 때 다시 묻는다. */
+    val confirmDrivingShow: Duration = Duration.ofSeconds(45),
     /** 이보다 오래된 스냅샷은 폐기. */
     val retroMaxElapsed: Duration = Duration.ofHours(24),
     /** SOC를 아직 못 읽었을 때 다시 확인하는 간격. */

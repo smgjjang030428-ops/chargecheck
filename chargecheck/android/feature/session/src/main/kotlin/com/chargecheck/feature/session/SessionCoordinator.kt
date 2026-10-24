@@ -1,5 +1,6 @@
 package com.chargecheck.feature.session
 
+import com.chargecheck.core.model.ChargeEvent
 import com.chargecheck.core.model.ChargeResult
 import com.chargecheck.core.model.ChargerStatus
 import com.chargecheck.core.model.GeoPoint
@@ -8,6 +9,7 @@ import com.chargecheck.core.model.StationId
 import com.chargecheck.core.model.distanceMetersTo
 import com.chargecheck.core.port.ChargeCheckApiPort
 import com.chargecheck.core.port.ClockPort
+import com.chargecheck.core.port.DuplicateEventException
 import com.chargecheck.core.port.LocationPort
 import com.chargecheck.core.port.NaviPort
 import com.chargecheck.core.port.RouteTarget
@@ -19,10 +21,12 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import java.time.Duration
 import java.time.Instant
 
 /** 화면에 보여줄 기록 한 줄. */
@@ -32,10 +36,25 @@ data class LogEntry(val at: Instant, val text: String)
 data class ChargerPick(val eventId: String, val stationName: String, val chargers: List<ChargerStatus>)
 
 /**
+ * 잔량 변화 없이 충전소를 떠난 뒤 "충전이 안 됐나요?" 확인(Effect.ConfirmLater).
+ * 출발 직후 주행 화면에 잠깐([visible]), 못 받으면 숨겼다가 다음 주차 때 한 번 더([askedAgain]) 묻는다.
+ */
+data class FailConfirm(
+    val event: ChargeEvent,
+    val stationName: String,
+    val createdAt: Instant,
+    val visible: Boolean = true,
+    val askedAgain: Boolean = false,
+) {
+    val question: String get() = "아까 ${stationName}에서 충전이 안 됐나요?"
+}
+
+/**
  * 포트의 Flow를 [SessionInput]으로 바꿔 [ChargeSessionMachine.reduce]에 넣고, 나온 [Effect]를 실행한다.
  * 상태는 [state]로 UI에 노출한다. (문서/앱구조_명세서_AI용.md §4.7 끝)
  *
  * @param resolveStation 내비 목적지가 충전소인지 판별한다. §4.8 StationResolver가 생기기 전까지의 자리.
+ * @param parked 주차(true)·주행(false). 주차→주행이면 [SessionInput.Departing]을 넣고, 못 받은 실패 확인을 다음 주차 때 다시 띄운다.
  */
 class SessionCoordinator(
     private val machine: ChargeSessionMachine,
@@ -45,6 +64,7 @@ class SessionCoordinator(
     private val api: ChargeCheckApiPort,
     private val clock: ClockPort,
     private val resolveStation: (RouteTarget) -> Station?,
+    private val parked: Flow<Boolean>? = null,
 ) {
     private val _state = MutableStateFlow<SessionState>(SessionState.Idle)
     val state: StateFlow<SessionState> = _state.asStateFlow()
@@ -62,6 +82,12 @@ class SessionCoordinator(
     /** 실패 기록 뒤 충전기 번호 질문. 답하거나 건너뛰면 null. */
     private val _chargerPick = MutableStateFlow<ChargerPick?>(null)
     val chargerPick: StateFlow<ChargerPick?> = _chargerPick.asStateFlow()
+
+    /** 잔량 변화 없이 떠난 충전소의 실패 확인. 답하거나 시간이 지나면 null. */
+    private val _confirm = MutableStateFlow<FailConfirm?>(null)
+    val confirm: StateFlow<FailConfirm?> = _confirm.asStateFlow()
+
+    private val cfg get() = machine.cfg
 
     /** false = 시동이 꺼져 앱이 멈춘 상태. 이 동안 들어오는 포트 이벤트는 버린다. */
     private val _running = MutableStateFlow(true)
@@ -105,8 +131,18 @@ class SessionCoordinator(
                 }
             },
             scope.launch {
+                var wasParked: Boolean? = null
+                parked?.distinctUntilChanged()?.collect { now ->
+                    val before = wasParked
+                    wasParked = now
+                    if (before == null || !_running.value) return@collect
+                    if (before && !now) onDeparting() else if (!before && now) onParked()
+                }
+            },
+            scope.launch {
                 time.collect { now ->
                     if (!_running.value) return@collect
+                    expireConfirm(now)
                     val due = mutex.withLock {
                         pendingTicks.filter { it <= now }.also { pendingTicks.removeAll(it.toSet()) }
                     }
@@ -132,6 +168,28 @@ class SessionCoordinator(
         _question.value = null
         _toast.value = null
         _chargerPick.value = null
+        _confirm.value = null
+    }
+
+    /** 실패 확인에 대한 답. yes = 충전이 안 됐음 → 미리 만든 FAIL 기록을 올린다. 아니면 아무것도 기록하지 않는다. */
+    suspend fun answerConfirm(yes: Boolean) {
+        val c = _confirm.value ?: return
+        _confirm.value = null
+        if (!yes) {
+            log("확인: 충전 문제 아님 → 기록하지 않음")
+            return
+        }
+        upload(c.event, c.stationName)
+    }
+
+    /**
+     * 상세 카드의 [여기 충전 안 됐어요]. 현장(최근 충전소 근처)에 있었는지는 화면 쪽에서 확인하고 부른다.
+     * 같은 충전소의 확인 질문이 떠 있으면 이 답으로 대신한다.
+     */
+    suspend fun reportFail(station: Station): Boolean {
+        if (_confirm.value?.event?.stationId == station.id) _confirm.value = null
+        log("직접 표시: ${station.name} 충전 안 됨")
+        return upload(machine.manualFail(station, vehicle.currentSoc(), clock.now()), station.name)
     }
 
     /** 충전기 번호 선택. null이면 "모르겠어요"(건너뜀). */
@@ -183,11 +241,10 @@ class SessionCoordinator(
 
     private suspend fun run(effect: Effect) {
         when (effect) {
-            is Effect.Upload -> {
-                val e = effect.event
-                val ok = api.postEvent(e).isSuccess
-                log("서버 기록: ${e.result} (${e.mode}, SOC ${e.socStart}→${e.socEnd}%)" + if (ok) "" else " — 실패, 재시도 대기")
-                if (ok && e.result == ChargeResult.FAIL) offerChargerPick(e.eventId, e.stationId)
+            is Effect.Upload -> upload(effect.event, effect.event.stationId.value.let { id -> _state.value.stationName() ?: id })
+            is Effect.ConfirmLater -> {
+                _confirm.value = FailConfirm(effect.event, effect.stationName, clock.now())
+                log("확인 요청: ${effect.stationName}에서 잔량 변화 없이 출발")
             }
             is Effect.Ask -> {
                 _question.value = effect
@@ -207,16 +264,91 @@ class SessionCoordinator(
         }
     }
 
+    /** 서버에 기록을 올리고, 실패 기록이면 충전기 번호를 묻는다. 같은 기기·충전소 2시간 중복은 서버가 받지 않는다. */
+    private suspend fun upload(e: ChargeEvent, stationName: String): Boolean {
+        val r = api.postEvent(e)
+        val note = when {
+            r.isSuccess -> ""
+            r.exceptionOrNull() is DuplicateEventException -> " — 2시간 안에 이미 기록됨"
+            else -> " — 실패, 재시도 대기"
+        }
+        log("서버 기록: ${e.result} (${e.mode}, SOC ${e.socStart}→${e.socEnd}%)$note")
+        if (r.isSuccess && e.result == ChargeResult.FAIL) offerChargerPick(e.eventId, e.stationId, stationName)
+        return r.isSuccess
+    }
+
+    /** 주차 → 주행. 다음 주차 때 이미 한 번 더 물은 확인은 여기서 끝낸다(무응답은 기록하지 않음). */
+    private suspend fun onDeparting() {
+        if (_confirm.value?.askedAgain == true) {
+            _confirm.value = null
+            log("확인: 답이 없어 기록하지 않음")
+        }
+        dispatch(SessionInput.Departing(clock.now()))
+    }
+
+    /** 주행 → 주차. 출발할 때 못 받은 확인을 한 번 더 띄운다. */
+    private fun onParked() {
+        val c = _confirm.value ?: return
+        if (!c.visible && !c.askedAgain) {
+            _confirm.value = c.copy(visible = true, askedAgain = true)
+            log("다시 묻기: ${c.question}")
+        }
+    }
+
+    /** 주행 중 카드는 잠깐만 보이고, 너무 오래된 확인은 버린다. */
+    private fun expireConfirm(now: Instant) {
+        val c = _confirm.value ?: return
+        val age = Duration.between(c.createdAt, now)
+        when {
+            age > cfg.confirmWindow -> {
+                _confirm.value = null
+                log("확인: 시간이 지나 기록하지 않음")
+            }
+            c.visible && !c.askedAgain && age > cfg.confirmDrivingShow -> {
+                _confirm.value = c.copy(visible = false)
+                log("주행 중 확인 카드 숨김 → 다음 주차 때 다시 물음")
+            }
+        }
+    }
+
     /** 충전기가 2대 이상인 충전소에서만 묻는다(1대면 물을 필요가 없다). 조회 실패는 조용히 넘어간다. */
-    private suspend fun offerChargerPick(eventId: String, stationId: StationId) {
+    private suspend fun offerChargerPick(eventId: String, stationId: StationId, name: String) {
         val status = runCatching { api.stationStatus(stationId).getOrNull() }.getOrNull() ?: return
         if (status.chargers.size < 2) return
-        val name = (_state.value as? SessionState.Failed)?.snap?.stationName ?: stationId.value
         _chargerPick.value = ChargerPick(eventId, name, status.chargers)
         log("질문: 몇 번 충전기였나요?")
     }
 
     private fun log(text: String) = _log.update { it + LogEntry(clock.now(), text) }
+}
+
+private fun SessionState.stationName(): String? = when (this) {
+    SessionState.Idle -> null
+    is SessionState.Approaching -> station.name
+    is SessionState.Candidate -> station.name
+    is SessionState.Monitoring -> snap.stationName
+    is SessionState.Asking -> snap.stationName
+    is SessionState.Charging -> snap.stationName
+    is SessionState.Completed -> snap.stationName
+    is SessionState.Failed -> snap.stationName
+    is SessionState.Suspended -> snap.stationName
+    is SessionState.AskingRetro -> snap.stationName
+    is SessionState.Ended -> snap.stationName
+}
+
+/** 세션이 붙어 있는 충전소. 상세 카드의 [여기 충전 안 됐어요]를 현장에서만 보이게 할 때 쓴다. */
+fun SessionState.stationId(): StationId? = when (this) {
+    SessionState.Idle -> null
+    is SessionState.Approaching -> null // 아직 도착 전
+    is SessionState.Candidate -> station.id
+    is SessionState.Monitoring -> snap.stationId
+    is SessionState.Asking -> snap.stationId
+    is SessionState.Charging -> snap.stationId
+    is SessionState.Completed -> snap.stationId
+    is SessionState.Failed -> snap.stationId
+    is SessionState.Suspended -> snap.stationId
+    is SessionState.AskingRetro -> snap.stationId
+    is SessionState.Ended -> snap.stationId
 }
 
 /** 세션이 붙어 있는 충전소 좌표. 떠났는지(Moved) 계산할 때 쓴다. */

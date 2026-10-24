@@ -15,6 +15,7 @@ import com.chargecheck.feature.session.SessionInput.Answer
 import com.chargecheck.feature.session.SessionInput.AppResumed
 import com.chargecheck.feature.session.SessionInput.AppStopped
 import com.chargecheck.feature.session.SessionInput.Arrived
+import com.chargecheck.feature.session.SessionInput.Departing
 import com.chargecheck.feature.session.SessionInput.Moved
 import com.chargecheck.feature.session.SessionInput.ReviewDone
 import com.chargecheck.feature.session.SessionInput.RouteTargetIsStation
@@ -84,6 +85,7 @@ class ChargeSessionMachineTest {
     }
 
     private fun List<Effect>.uploads() = filterIsInstance<Effect.Upload>().map { it.event }
+    private fun List<Effect>.confirms() = filterIsInstance<Effect.ConfirmLater>()
 
     // ------------------------------------------------------------ 시작
 
@@ -232,11 +234,99 @@ class ChargeSessionMachineTest {
         }
 
         @Test
-        fun `T22 결과 없이 떠나면 기록하지 않는다`() {
+        fun `T22 결과 없이 떠나면 바로 기록하지 않고 확인을 맡긴다`() {
             val (state, effects) = run(monitoring(), Moved(200))
             assertEquals(Idle, state)
             assertTrue(effects.uploads().isEmpty())
             assertTrue(effects.contains(Effect.ClearSnapshot))
+            assertEquals(ChargeResult.FAIL, effects.confirms().single().event.result)
+        }
+    }
+
+    // ------------------------------------------------------------ 잔량 변화 없이 출발 (T23~T25)
+
+    @Nested
+    inner class Departure {
+        @Test
+        fun `T24 지켜보던 중 출발하면 FAIL을 올리지 않고 확인을 맡긴다`() {
+            val (state, effects) = run(monitoring(), Departing(at(8)))
+            assertEquals(Idle, state)
+            assertTrue(effects.uploads().isEmpty())
+            val c = effects.confirms().single()
+            assertEquals(fast.name, c.stationName)
+            assertEquals(Triple(ChargeResult.FAIL, DetectMode.LIVE, 42), Triple(c.event.result, c.event.mode, c.event.socEnd))
+            assertEquals(at(8), c.event.occurredAt)
+        }
+
+        @Test
+        fun `T23 세션 시작 전이라도 2분 넘게 있다가 출발하면 확인`() {
+            val (state, effects) = run(Idle, Arrived(fast, t0), Soc(SocSample(42, t0)), Departing(at(3)))
+            assertEquals(Idle, state)
+            assertEquals(at(3), effects.confirms().single().event.occurredAt)
+        }
+
+        @Test
+        fun `T23 잠깐 들렀다 가면 묻지 않는다`() {
+            val (_, effects) = run(Idle, Arrived(fast, t0), Soc(SocSample(42, t0)), Departing(at(1)))
+            assertTrue(effects.confirms().isEmpty())
+        }
+
+        @Test
+        fun `T23 잔량을 못 읽었으면 묻지 않는다`() {
+            val (_, effects) = run(Idle, Arrived(fast, t0), Departing(at(3)))
+            assertTrue(effects.confirms().isEmpty())
+        }
+
+        @Test
+        fun `T24 충전이 안 되나요 질문에 답하지 않고 출발해도 확인을 맡긴다`() {
+            val asking = assertIs<Asking>(run(monitoring(), Tick(at(15))).first)
+            val (state, effects) = run(asking, Departing(at(16)))
+            assertEquals(Idle, state)
+            assertEquals(1, effects.confirms().size)
+        }
+
+        @Test
+        fun `T25 재시동 질문에 답하지 않고 출발하면 RETRO로 확인을 맡긴다`() {
+            val retro = assertIs<AskingRetro>(run(Suspended(snapOf(fast, 42)), AppResumed(42, fast.location, at(40))).first)
+            val c = run(retro, Departing(at(41))).second.confirms().single()
+            assertEquals(DetectMode.RETRO, c.event.mode)
+        }
+
+        @Test
+        fun `충전이 확인된 뒤 출발하면 확인하지 않는다`() {
+            val charging = assertIs<Charging>(run(monitoring(), Soc(SocSample(43, at(7)))).first)
+            val (state, effects) = run(charging, Departing(at(20)))
+            assertIs<Charging>(state)
+            assertTrue(effects.confirms().isEmpty())
+        }
+
+        @Test
+        fun `꽂았는데 안 돼서 3분 만에 시동 켠 채로 떠나는 시나리오`() {
+            val (_, effects) = run(
+                Idle,
+                Arrived(fast, t0),
+                Soc(SocSample(42, t0)),
+                Soc(SocSample(42, at(2))),
+                Departing(at(3)),
+                Moved(300),
+            )
+            assertTrue(effects.uploads().isEmpty())
+            assertEquals(1, effects.confirms().size)
+        }
+
+        @Test
+        fun `시동 끄고 꽂았다가 8분 만에 돌아와 떠나는 시나리오`() {
+            val (_, effects) = run(
+                Idle,
+                Arrived(fast, t0),
+                Soc(SocSample(42, t0)),
+                Tick(at(5)),
+                AppStopped,
+                AppResumed(42, fast.location, at(8)), // 15분 전이라 T13b: 다시 지켜봄
+                Departing(at(9)),
+            )
+            assertTrue(effects.uploads().isEmpty())
+            assertEquals(1, effects.confirms().size)
         }
     }
 

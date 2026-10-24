@@ -48,6 +48,7 @@ class SessionCoordinatorTest {
     private val targets = MutableStateFlow<List<RouteTarget>>(emptyList())
     private val arrivals = MutableSharedFlow<RouteTarget>(extraBufferCapacity = 4)
     private val locations = MutableSharedFlow<GeoPoint>(extraBufferCapacity = 4)
+    private val parked = MutableStateFlow(true)
     private val uploaded = mutableListOf<ChargeEvent>()
     private var socNow: Int? = null
     private val attached = mutableListOf<Pair<String, String>>()
@@ -85,6 +86,7 @@ class SessionCoordinatorTest {
         },
         clock = object : ClockPort { override fun now(): Instant = now.value },
         resolveStation = { if (it.poiId == station.id.value) station else null },
+        parked = parked,
     )
 
     private fun at(min: Long) = t0 + Duration.ofMinutes(min)
@@ -211,5 +213,84 @@ class SessionCoordinatorTest {
 
         targets.value = listOf(target)
         assertIs<SessionState.Approaching>(coordinator.state.value)
+    }
+
+    // ------------------------------------------------------------ 잔량 변화 없이 출발 → 확인
+
+    /** 도착 → 42% → 3분 머묾(세션 시작 전) → 출발. 꽂아 봤는데 안 돼서 떠나는 흔한 경우. */
+    private suspend fun departWithoutCharge() {
+        arrivals.emit(target)
+        soc.emit(SocSample(42, t0))
+        now.value = at(3)
+        parked.value = false
+    }
+
+    @Test
+    fun `출발할 때 확인 카드가 뜨고 안 됐다고 하면 FAIL과 충전기 번호 질문`() = runTest(UnconfinedTestDispatcher()) {
+        coordinator.start(backgroundScope, now)
+        departWithoutCharge()
+        val c = assertNotNull(coordinator.confirm.value)
+        assertEquals(true, c.visible)
+        assertEquals("아까 강남 급속충전소에서 충전이 안 됐나요?", c.question)
+        assertEquals(emptyList(), uploaded)
+
+        coordinator.answerConfirm(yes = true)
+        assertNull(coordinator.confirm.value)
+        assertEquals(listOf(ChargeResult.FAIL to DetectMode.LIVE), uploaded.map { it.result to it.mode })
+        assertEquals("강남 급속충전소", assertNotNull(coordinator.chargerPick.value).stationName)
+    }
+
+    @Test
+    fun `아니라고 하면 기록하지 않는다`() = runTest(UnconfinedTestDispatcher()) {
+        coordinator.start(backgroundScope, now)
+        departWithoutCharge()
+        coordinator.answerConfirm(yes = false)
+        assertNull(coordinator.confirm.value)
+        assertEquals(emptyList(), uploaded)
+    }
+
+    @Test
+    fun `주행 중 못 답하면 숨겼다가 다음 주차 때 한 번 더 묻는다`() = runTest(UnconfinedTestDispatcher()) {
+        coordinator.start(backgroundScope, now)
+        departWithoutCharge()
+        now.value = at(3) + Duration.ofSeconds(50)
+        assertEquals(false, assertNotNull(coordinator.confirm.value).visible)
+
+        now.value = at(20)
+        parked.value = true // 다음 충전소에 주차
+        val again = assertNotNull(coordinator.confirm.value)
+        assertEquals(true, again.visible && again.askedAgain)
+
+        coordinator.answerConfirm(yes = true)
+        assertEquals(1, uploaded.size)
+    }
+
+    @Test
+    fun `다시 물었는데도 답 없이 출발하면 기록하지 않는다`() = runTest(UnconfinedTestDispatcher()) {
+        coordinator.start(backgroundScope, now)
+        departWithoutCharge()
+        now.value = at(4)
+        parked.value = true
+        parked.value = false
+        assertNull(coordinator.confirm.value)
+        assertEquals(emptyList(), uploaded)
+    }
+
+    @Test
+    fun `2시간이 지난 확인은 버린다`() = runTest(UnconfinedTestDispatcher()) {
+        coordinator.start(backgroundScope, now)
+        departWithoutCharge()
+        now.value = at(3 + 121)
+        assertNull(coordinator.confirm.value)
+    }
+
+    @Test
+    fun `상세 카드에서 직접 표시하면 MANUAL 실패 기록`() = runTest(UnconfinedTestDispatcher()) {
+        coordinator.start(backgroundScope, now)
+        socNow = 30
+        assertEquals(true, coordinator.reportFail(station))
+        val e = uploaded.single()
+        assertEquals(Triple(ChargeResult.FAIL, DetectMode.MANUAL, 30), Triple(e.result, e.mode, e.socEnd))
+        assertNotNull(coordinator.chargerPick.value)
     }
 }
