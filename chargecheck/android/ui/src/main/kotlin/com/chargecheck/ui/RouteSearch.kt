@@ -39,14 +39,24 @@ import com.chargecheck.core.model.PublicState
 import com.chargecheck.core.model.RouteCandidate
 import com.chargecheck.core.model.RoutePlan
 
-/** 지역 검색 상자의 상태. [message] = 검색 중·결과 없음·서버 오류 안내. */
+/**
+ * 충전소·지역 찾기 상자의 상태. [message] = 검색 중·결과 없음·서버 오류 안내.
+ * [naviQuery]가 있으면(충전소가 안 나온 일반 목적지) [내비에서 검색] 버튼을 보여준다.
+ */
 data class SearchUi(
     val query: String = "",
     val results: List<Place> = emptyList(),
     val message: String? = null,
+    val naviQuery: String? = null,
 )
 
-/** 지도 위 검색 상자 + 결과 목록(주차 중에만 보인다). */
+/** 주행 중 경로 카드 한 장. [canGo] = 들를 수 있는 추천 충전소가 있음. */
+data class RouteCardUi(val title: String, val detail: String, val canGo: Boolean)
+
+/**
+ * 지도 위 충전소·지역 찾기 상자 + 결과 목록(주차 중에만 보인다). 우리 DB(전국 충전소 이름·주소)에서 찾는다.
+ * 일반 목적지는 내비가 담당하므로, 충전소가 안 나오면 [내비에서 검색]으로 넘긴다.
+ */
 @Composable
 internal fun SearchBox(
     modifier: Modifier,
@@ -54,6 +64,7 @@ internal fun SearchBox(
     onQueryChange: (String) -> Unit,
     onSearch: () -> Unit,
     onPick: (Place) -> Unit,
+    onNaviSearch: (String) -> Unit = {},
 ) {
     val focus = LocalFocusManager.current
     Column(modifier.width(560.dp)) {
@@ -61,7 +72,7 @@ internal fun SearchBox(
             value = search.query,
             onValueChange = onQueryChange,
             modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(14.dp)).background(Panel),
-            placeholder = { Text("목적지·지역 검색 (예: 서울시청)", color = TextSub, fontSize = 20.sp) },
+            placeholder = { Text("충전소·지역 찾기 (예: 판교, SW드림타운)", color = TextSub, fontSize = 20.sp) },
             textStyle = TextStyle(color = TextMain, fontSize = 20.sp),
             singleLine = true,
             shape = RoundedCornerShape(14.dp),
@@ -81,13 +92,20 @@ internal fun SearchBox(
                 cursorColor = TextMain,
             ),
         )
-        if (search.message != null || search.results.isNotEmpty()) {
+        if (search.message != null || search.results.isNotEmpty() || search.naviQuery != null) {
             Spacer(Modifier.height(6.dp))
             Column(
                 Modifier.fillMaxWidth().heightIn(max = 420.dp).clip(RoundedCornerShape(14.dp)).background(Panel)
                     .verticalScroll(rememberScrollState()).padding(vertical = 6.dp),
             ) {
                 search.message?.let { Text(it, color = TextSub, fontSize = 18.sp, modifier = Modifier.padding(16.dp)) }
+                search.naviQuery?.let { q ->
+                    OutlinedButton(
+                        onClick = { focus.clearFocus(); onNaviSearch(q) },
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                    ) { Text("내비에서 '$q' 목적지 찾기", color = TextMain, fontSize = 18.sp) }
+                }
                 search.results.forEach { p ->
                     Column(Modifier.fillMaxWidth().clickable { onPick(p) }.padding(horizontal = 16.dp, vertical = 10.dp)) {
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -108,8 +126,9 @@ internal fun SearchBox(
 }
 
 /**
- * 목적지까지 가는 길의 충전소(오른쪽 패널). 차의 남은 주행 가능 거리로 충전이 필요한지 먼저 말하고,
- * 경로 순서대로 충전소·도착 예상 배터리·추천을 보여준다. 줄을 누르면 지도에 상세 카드, [들렀다 가기]는 경유지로 안내.
+ * 내비 목적지까지 가는 길의 충전소(오른쪽 패널). 목적지가 바뀌고 충전이 필요할 때만 자동으로 열린다.
+ * 차의 남은 주행 가능 거리로 충전이 필요한지 먼저 말하고, 가는 순서대로 충전소·도착 예상 배터리·추천을 보여준다.
+ * 줄을 누르면 지도에 상세 카드, [들렀다 가기]는 경유지 추가(목적지는 이미 내비에 있음), [괜찮아요]는 닫기.
  */
 @Composable
 internal fun RoutePanel(
@@ -120,7 +139,7 @@ internal fun RoutePanel(
     onClose: () -> Unit,
 ) {
     Column(modifier.clip(RoundedCornerShape(20.dp)).background(Panel).padding(22.dp)) {
-        Text("${plan.destination.name}까지 ${km(plan.routeKm)}", color = TextMain, fontSize = 26.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text("${plan.destination.name}까지 약 ${km(plan.routeKm)}", color = TextMain, fontSize = 26.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Spacer(Modifier.height(4.dp))
         val car = listOfNotNull(plan.rangeKm?.let { "남은 주행 ${km(it)}" }, plan.soc?.let { "배터리 $it%" })
         Text(car.joinToString(" · ").ifBlank { "차의 남은 주행 가능 거리를 못 읽었어요" }, color = TextSub, fontSize = 18.sp)
@@ -132,22 +151,19 @@ internal fun RoutePanel(
             else -> "충전 없이 갈 수 있어요" to Green
         }
         Text(banner, color = TextMain, fontSize = 19.sp, modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(color).padding(12.dp))
-        if (!plan.roadRoute) Text("도로 경로를 못 받아 직선 거리로 계산했어요", color = TextSub, fontSize = 15.sp, modifier = Modifier.padding(top = 6.dp))
+        if (!plan.roadRoute) Text("경로 근처(직선 기준)로 골랐어요 · 실제 길은 내비가 안내해요", color = TextSub, fontSize = 15.sp, modifier = Modifier.padding(top = 6.dp))
         Spacer(Modifier.height(10.dp))
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            if (plan.candidates.isEmpty()) Text("경로 1.5km 안에 쓸 수 있는 급속 충전소가 없어요", color = TextSub, fontSize = 18.sp)
+            if (plan.candidates.isEmpty()) Text("경로 근처에 쓸 수 있는 급속 충전소가 없어요", color = TextSub, fontSize = 18.sp)
             plan.candidates.forEach { c -> CandidateRow(c, c.stop.station.id == plan.recommendedId, onSelect, onGo) }
         }
         Spacer(Modifier.height(12.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-            Button(
-                onClick = { onGo(null) },
-                colors = ButtonDefaults.buttonColors(containerColor = TextMain, contentColor = Bg),
-                shape = RoundedCornerShape(14.dp),
-            ) { Text("바로 안내", fontSize = 20.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)) }
+        Row(verticalAlignment = Alignment.CenterVertically) {
             OutlinedButton(onClick = onClose, shape = RoundedCornerShape(14.dp)) {
-                Text("닫기", color = TextMain, fontSize = 20.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp))
+                Text("괜찮아요", color = TextMain, fontSize = 20.sp, modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp))
             }
+            Spacer(Modifier.width(16.dp))
+            Text("글레오에게 '들렀다 가자'라고 해도 돼요", color = TextSub, fontSize = 15.sp)
         }
     }
 }

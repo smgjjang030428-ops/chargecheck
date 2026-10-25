@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application>
+        <!--
+            글레오 AI 연동(Gleo Interface). 운전자 말을 글레오가 assets/schema.json의 기능으로 바꿔 브로드캐스트로 보낸다.
+            화면 없이 처리하고(component = service) APP_ACTION_RESPONSE로 대답 문장을 돌려준다. 기능 이름 = 액션 이름.
+        -->
+        <receiver
+            android:name=".GleoActionReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="CHECK_CHARGERS" />
+                <action android:name="ADD_CHARGER_STOP" />
+                <action android:name="REPORT_CHARGER_PROBLEM" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

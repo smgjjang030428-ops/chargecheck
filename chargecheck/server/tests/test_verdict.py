@@ -101,3 +101,23 @@ def test_하루_실패_10건_넘는_기기는_판정에서_뺀다():
     spam = [fail("spammer", m) for m in range(5, 60, 5)]  # 11건
     v = compute_verdict(chargers("2", "2"), spam, NOW)
     assert v.verdict == "GRAY"
+
+
+# ------------------------------------------------------------ 실패 이유 (10/25)
+
+def test_일반차_주차_막힘은_실패로_세지_않고_안내만():
+    blocked = [EventIn(d, "FAIL", ago(20), "01", "BLOCKED") for d in ("a", "b")]
+    v = compute_verdict(chargers("2"), blocked, NOW)
+    assert v.verdict == "GRAY" and v.recent_fail_count == 0
+    assert v.notice == "20분 전 일반차 주차 막힘 제보"
+
+
+def test_주차_막힘_안내는_1시간이_지나면_사라진다():
+    v = compute_verdict(chargers("2"), [EventIn("a", "FAIL", ago(70), "01", "BLOCKED")], NOW)
+    assert v.notice is None
+
+
+def test_결제_실패는_실패로_세고_문구로_구분():
+    v = compute_verdict(chargers("2"), [EventIn("a", "FAIL", ago(10), "01", "PAYMENT")], NOW)
+    assert v.verdict == "YELLOW"
+    assert v.message.endswith("결제 실패 제보 포함")

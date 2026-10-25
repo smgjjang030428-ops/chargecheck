@@ -43,7 +43,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
-/** 전이 번호(T1…)는 문서/앱구조_명세서_AI용.md §4.7 전이표와 같다. */
+/** 전이 번호(T1…)는 기획문서/앱구조_명세서_AI용.md §4.7 전이표와 같다. */
 class ChargeSessionMachineTest {
 
     private val t0: Instant = Instant.parse("2026-11-10T08:00:00Z")

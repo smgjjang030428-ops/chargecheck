@@ -45,6 +45,7 @@ private val DrivingBody = 28.sp
  * - "충전이 안 되나요?" 질문은 주행 중에 띄우지 않는다. 정차하면 AskSheet로 다시 보인다.
  * - 예외: 충전소에서 잔량 변화 없이 막 출발했을 때의 확인([confirm])은 출발 직후 잠깐(45초) 버튼 2개로 묻는다.
  *   못 누르면 숨겼다가 다음 주차 때 다시 묻는다. 경고가 있으면 경고가 먼저다.
+ * - 내비 목적지가 바뀌었는데 충전이 필요하면 [route] 카드(15초, 버튼 2개). 우선순위: 경고 > 출발 확인 > 경로 카드.
  */
 @Composable
 fun DrivingScreen(
@@ -53,6 +54,8 @@ fun DrivingScreen(
     onWarningChoice: (VoiceIntent) -> Unit,
     confirm: FailConfirm? = null,
     onConfirm: (Boolean) -> Unit = {},
+    route: RouteCardUi? = null,
+    onRoute: (Boolean) -> Unit = {},
 ) {
     Box(Modifier.fillMaxSize().background(Bg).padding(32.dp)) {
         Text(
@@ -66,6 +69,8 @@ fun DrivingScreen(
                 DrivingWarning(warning, onWarningChoice)
             } else if (confirm != null && confirm.visible) {
                 DrivingConfirm(confirm, onConfirm)
+            } else if (route != null) {
+                DrivingRoute(route, onRoute)
             } else {
                 DrivingStatus(state)
             }
@@ -95,6 +100,33 @@ private fun DrivingStatus(state: SessionState) {
     if (station != null) {
         Spacer(Modifier.height(16.dp))
         Text(station, color = TextSub, fontSize = DrivingBody, maxLines = 1, overflow = TextOverflow.Ellipsis)
+    }
+}
+
+/** 주행 중 경로 카드. [들렀다 가기] = 추천 충전소를 경유지로, [괜찮아요] = 그대로. 갈 수 있는 곳이 없으면 [확인]만. */
+@Composable
+private fun DrivingRoute(route: RouteCardUi, onRoute: (Boolean) -> Unit) {
+    Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(Panel).padding(36.dp)) {
+        Text(route.title, color = TextMain, fontSize = DrivingTitle, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Spacer(Modifier.height(12.dp))
+        Text(route.detail, color = TextSub, fontSize = DrivingBody, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Spacer(Modifier.height(32.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+            if (route.canGo) {
+                Button(
+                    onClick = { onRoute(true) },
+                    modifier = Modifier.weight(1.4f).heightIn(min = DrivingButtonHeight),
+                    shape = RoundedCornerShape(18.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = Green, contentColor = Color.White),
+                ) { Text("들렀다 가기", fontSize = DrivingBody, fontWeight = FontWeight.Bold) }
+            }
+            Button(
+                onClick = { onRoute(false) },
+                modifier = Modifier.weight(1f).heightIn(min = DrivingButtonHeight),
+                shape = RoundedCornerShape(18.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF3A3D41), contentColor = TextMain),
+            ) { Text(if (route.canGo) "괜찮아요" else "확인", fontSize = DrivingBody, fontWeight = FontWeight.Bold) }
+        }
     }
 }
 

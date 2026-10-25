@@ -1,0 +1,56 @@
+{
+  "packageName": "com.chargecheck.app",
+  "appDescription": "ChargeCheck tells EV drivers which public chargers actually work, using real charging results recorded by cars, and lets them report charger problems by voice.",
+  "version": "0.1.0",
+  "actionCalls": [
+    {
+      "type": "function",
+      "function": {
+        "name": "CHECK_CHARGERS",
+        "description": "Find reliable EV charging stations near the car, along the route to the navigation destination, or check the destination charger, using recent real charging results.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "scope": { "type": "string", "enum": ["route", "nearby", "destination"], "description": "Where to look: along the route to the current destination, near the car, or the destination charger itself." },
+            "min_kw": { "type": "number", "description": "Minimum charging power in kW the user asked for. Use 0 if not mentioned." },
+            "free_parking": { "type": "boolean", "description": "True if the user wants stations with free parking only." },
+            "connector": { "type": "string", "enum": ["any", "DC_COMBO", "CHADEMO", "AC3", "AC_SLOW"], "description": "Connector type the user asked for, or any." }
+          },
+          "required": ["scope"]
+        },
+        "component": "service"
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "ADD_CHARGER_STOP",
+        "description": "Add the recommended reliable charging station as a waypoint in the car navigation, usually the one just suggested.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "scope": { "type": "string", "enum": ["route", "nearby"], "description": "Pick the stop along the route or near the car." }
+          },
+          "required": []
+        },
+        "component": "service"
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "REPORT_CHARGER_PROBLEM",
+        "description": "Record a problem with the charger at the station where the car is now, so other drivers are warned.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "problem": { "type": "string", "enum": ["NOT_CHARGING", "BROKEN", "PAYMENT", "BLOCKED", "CABLE_SHORT", "SLOW", "OTHER"], "description": "What went wrong: not charging, broken charger, payment failed, blocked by a parked non-EV car, cable too short, charging too slow, or other." },
+            "charger_number": { "type": "string", "description": "Charger number written on the charger if the user said it, for example 3. Empty if not mentioned." }
+          },
+          "required": ["problem"]
+        },
+        "component": "service"
+      }
+    }
+  ]
+}

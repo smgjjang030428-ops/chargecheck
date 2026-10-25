@@ -11,6 +11,8 @@ class CamelModel(BaseModel):
 
 
 Verdict = Literal["GREEN", "YELLOW", "RED", "GRAY"]
+# 실패 이유. BLOCKED(일반차 주차)는 충전기 실패로 세지 않는다. 케이블·느림 같은 불편은 리뷰 태그로 보낸다.
+FailReason = Literal["NOT_CHARGING", "BROKEN", "PAYMENT", "BLOCKED", "OTHER"]
 ReviewTag = Literal["CABLE_SHORT", "SPACE_NARROW", "HAS_ROOF", "SLOW_SPEED", "PAYMENT_ISSUE", "BLOCKED_BY_CAR"]
 
 
@@ -24,10 +26,13 @@ class ChargeEventIn(CamelModel):
     minutes: int = Field(ge=0)
     occurred_at: datetime
     charger_id: str | None = None
+    reason: FailReason | None = None
 
 
 class AttachChargerIn(CamelModel):
-    charger_id: str = Field(min_length=1, max_length=8)
+    """실패 기록 뒤에 충전기 번호나 이유를 붙이거나 고친다(운전자가 10분 안에 다시 말한 경우 등)."""
+    charger_id: str | None = Field(None, min_length=1, max_length=8)
+    reason: FailReason | None = None
 
 
 class AcceptedOut(CamelModel):
@@ -58,6 +63,7 @@ class StationStatusOut(CamelModel):
     ok_count: int
     chargers: list[ChargerStatusOut]
     top_tags: list[ReviewTag]
+    notice: str | None = None          # 판정과 별개인 임시 안내(예: "20분 전 일반차 주차 막힘 제보")
 
 
 class StationOut(CamelModel):
@@ -99,19 +105,19 @@ class PlaceOut(CamelModel):
 class RouteStationOut(CamelModel):
     station: StationOut
     status: StationStatusOut
-    along_km: float          # 출발점에서 경로를 따라간 거리
-    detour_m: int            # 경로에서 벗어난 거리
+    along_km: float          # 출발점에서 가는 거리(도로 거리로 환산한 추정값)
+    detour_m: int            # 출발지~목적지 직선에서 떨어진 거리
     reachable: bool          # 남은 주행 가능 거리 안(15% 여유)
     arrival_soc: int | None  # 도착 예상 배터리(%)
 
 
 class AlongRouteOut(CamelModel):
     route_km: float
-    source: Literal["ROAD", "STRAIGHT"]  # 도로 경로 / 경로 서버를 못 써서 직선 근사
+    source: Literal["CORRIDOR"]          # 외부 경로 서버 없이 출발지~목적지 띠 안에서 계산(실제 길은 내비가 짠다)
     range_km: float | None
     needs_charge: bool                   # 남은 거리로 목적지까지 못 감(15% 여유 기준)
-    route: list[tuple[float, float]]     # 지도에 그릴 경로 [(lat, lon)]
-    candidates: list[RouteStationOut]    # 경로 위 충전소(5km 구간마다 가장 좋은 곳)
+    route: list[tuple[float, float]]     # 지도에 그릴 선 [(lat, lon)] — 출발지·목적지 직선
+    candidates: list[RouteStationOut]    # 경로 근처 충전소(5km 구간마다 가장 좋은 곳)
     recommended_id: str | None           # 추천 충전 지점
 
 

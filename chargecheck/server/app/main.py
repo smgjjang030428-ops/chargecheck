@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from sqlalchemy import func, select
 
 from app.config import settings
-from app.db import Base, SessionLocal, engine
+from app.db import Base, SessionLocal, engine, ensure_columns
 from app.jobs.public_sync import sync_info, sync_status
 from app.models import Station
 from app.routers import events, places, reviews, stations
@@ -40,6 +40,7 @@ async def _sync_loop() -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     Base.metadata.create_all(engine)
+    ensure_columns(engine)
     task = None
     if settings.SYNC_ENABLED and settings.PUBLIC_API_KEY:
         task = asyncio.create_task(_sync_loop())

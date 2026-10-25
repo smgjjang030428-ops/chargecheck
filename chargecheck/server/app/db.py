@@ -1,6 +1,6 @@
 from collections.abc import Iterator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.config import settings
@@ -18,6 +18,22 @@ def make_engine(url: str):
 
 engine = make_engine(settings.DATABASE_URL)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
+
+
+# 테이블이 이미 있으면 create_all이 새 칼럼을 만들지 않는다. 마이그레이션 도구 없이 쓰는 동안의 최소 보정.
+NEW_COLUMNS = {"charge_event": {"reason": "VARCHAR"}}
+
+
+def ensure_columns(eng) -> None:
+    insp = inspect(eng)
+    with eng.begin() as conn:
+        for table, cols in NEW_COLUMNS.items():
+            if not insp.has_table(table):
+                continue
+            have = {c["name"] for c in insp.get_columns(table)}
+            for name, sql_type in cols.items():
+                if name not in have:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}"))
 
 
 def get_session() -> Iterator[Session]:

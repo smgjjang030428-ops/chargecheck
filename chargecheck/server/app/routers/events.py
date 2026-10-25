@@ -39,6 +39,7 @@ def post_event(body: ChargeEventIn, response: Response, device: str = Depends(de
             chger_id=body.charger_id,
             result=body.result,
             mode=body.mode,
+            reason=body.reason if body.result == "FAIL" else None,
             soc_start=body.soc_start,
             soc_end=body.soc_end,
             minutes=body.minutes,
@@ -53,10 +54,15 @@ def post_event(body: ChargeEventIn, response: Response, device: str = Depends(de
 
 @router.patch("/{event_id}", response_model=AcceptedOut, response_model_exclude_none=True)
 def attach_charger(event_id: str, body: AttachChargerIn, device: str = Depends(device_hash), session: Session = Depends(get_session)):
-    """실패 기록 뒤 운전자가 고른 충전기 번호를 붙인다. 기록을 올린 같은 기기만 가능."""
+    """실패 기록 뒤 운전자가 고른 충전기 번호·이유를 붙이거나 고친다. 기록을 올린 같은 기기만 가능."""
     event = session.get(ChargeEvent, event_id)
     if event is None or event.device_hash != device:
         raise HTTPException(404, "기록 없음")
-    event.chger_id = body.charger_id
+    if body.charger_id is None and body.reason is None:
+        raise HTTPException(422, "chargerId 또는 reason이 필요해요")
+    if body.charger_id is not None:
+        event.chger_id = body.charger_id
+    if body.reason is not None and event.result == "FAIL":
+        event.reason = body.reason
     session.commit()
     return AcceptedOut(accepted=True)

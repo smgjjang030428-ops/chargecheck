@@ -6,6 +6,7 @@ import com.chargecheck.core.model.ChargeEvent
 import com.chargecheck.core.model.ChargeResult
 import com.chargecheck.core.model.DetectMode
 import com.chargecheck.core.model.DeviceId
+import com.chargecheck.core.model.FailReason
 import com.chargecheck.core.model.SocSample
 import com.chargecheck.core.model.Station
 import com.chargecheck.core.model.distanceMetersTo
@@ -39,7 +40,7 @@ import java.time.Instant
 
 /**
  * 충전 세션 판단 로직. 부수 효과 없는 순수 함수다.
- * 전이 번호(T1…)는 문서/앱구조_명세서_AI용.md §4.7 전이표와 같다.
+ * 전이 번호(T1…)는 기획문서/앱구조_명세서_AI용.md §4.7 전이표와 같다.
  *
  * 원칙
  * - SUCCESS는 자동으로, FAIL은 운전자 확인(YES) 뒤에만 업로드한다.
@@ -54,7 +55,7 @@ class ChargeSessionMachine(
 ) {
 
     /** 운전자가 상세 카드에서 직접 [여기 충전 안 됐어요]를 누른 기록(F2 보조). 현장에 있었는지는 호출하는 쪽이 확인한다. */
-    fun manualFail(station: Station, soc: Int?, at: Instant) = ChargeEvent(
+    fun manualFail(station: Station, soc: Int?, at: Instant, reason: FailReason? = null, chargerId: String? = null) = ChargeEvent(
         eventId = ids.newEventId(),
         deviceId = deviceId,
         stationId = station.id,
@@ -64,6 +65,8 @@ class ChargeSessionMachine(
         socEnd = soc ?: 0,
         minutes = 0,
         occurredAt = at,
+        chargerId = chargerId,
+        reason = reason,
     )
 
     fun reduce(state: SessionState, input: SessionInput): Transition = when (state) {

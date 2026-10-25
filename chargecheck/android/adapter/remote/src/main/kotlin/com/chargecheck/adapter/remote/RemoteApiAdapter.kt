@@ -4,6 +4,7 @@ import com.chargecheck.core.model.ChargeEvent
 import com.chargecheck.core.model.ChargerStatus
 import com.chargecheck.core.model.ChargerType
 import com.chargecheck.core.model.DeviceId
+import com.chargecheck.core.model.FailReason
 import com.chargecheck.core.model.GeoPoint
 import com.chargecheck.core.model.NearbyStation
 import com.chargecheck.core.model.Place
@@ -29,7 +30,7 @@ import java.net.URLEncoder
 import java.time.Instant
 
 /**
- * ChargeCheck 서버 REST API (문서/앱구조_명세서_AI용.md §5.2).
+ * ChargeCheck 서버 REST API (기획문서/앱구조_명세서_AI용.md §5.2).
  * 의존성을 늘리지 않으려고 HttpURLConnection + org.json(안드로이드 내장)으로 썼다.
  *
  * @param baseUrl 에뮬레이터에서 개발 PC의 서버는 "http://10.0.2.2:8000".
@@ -50,13 +51,20 @@ class RemoteApiAdapter(
         put("minutes", event.minutes)
         put("occurredAt", event.occurredAt.toString())
         event.chargerId?.let { put("chargerId", it) }
+        event.reason?.let { put("reason", it.name) }
     }).mapCatching { body ->
         // 같은 기기·충전소 2시간 안 기록은 200 {"accepted": false}로 온다
         if (body.isNotBlank() && !JSONObject(body).optBoolean("accepted", true)) throw DuplicateEventException()
     }
 
     override suspend fun attachCharger(eventId: String, chargerId: String): Result<Unit> =
-        call("PATCH", "/v1/events/${enc(eventId)}", JSONObject().put("chargerId", chargerId)).map { }
+        updateEvent(eventId, chargerId, null)
+
+    override suspend fun updateEvent(eventId: String, chargerId: String?, reason: FailReason?): Result<Unit> =
+        call("PATCH", "/v1/events/${enc(eventId)}", JSONObject().apply {
+            chargerId?.let { put("chargerId", it) }
+            reason?.let { put("reason", it.name) }
+        }).map { }
 
     override suspend fun stationStatus(id: StationId): Result<StationStatus> =
         call("GET", "/v1/stations/${enc(id.value)}/status").map { status(JSONObject(it)) }
@@ -88,11 +96,12 @@ class RemoteApiAdapter(
     }
 
     /** 목적지까지 가는 길의 충전소. 차의 남은 주행 가능 거리·배터리를 주면 갈 수 있는지와 추천 지점이 붙는다. */
-    suspend fun alongRoute(from: GeoPoint, to: Place, rangeKm: Double?, soc: Int?): Result<RoutePlan> {
+    suspend fun alongRoute(from: GeoPoint, to: Place, rangeKm: Double?, soc: Int?, roadKm: Double? = null): Result<RoutePlan> {
         val q = buildString {
             append("fromLat=${from.lat}&fromLon=${from.lon}&toLat=${to.location.lat}&toLon=${to.location.lon}")
             rangeKm?.let { append("&rangeKm=$it") }
             soc?.let { append("&soc=$it") }
+            roadKm?.let { append("&roadKm=$it") }
         }
         return call("GET", "/v1/stations/along-route?$q").map { body ->
             val o = JSONObject(body)
@@ -100,7 +109,7 @@ class RemoteApiAdapter(
             RoutePlan(
                 destination = to,
                 routeKm = o.getDouble("routeKm"),
-                roadRoute = o.getString("source") == "ROAD",
+                roadRoute = false, // 서버는 외부 경로 서버 없이 경로 근처(CORRIDOR)로 계산한다
                 rangeKm = if (o.isNull("rangeKm")) null else o.getDouble("rangeKm"),
                 soc = soc,
                 needsCharge = o.getBoolean("needsCharge"),
@@ -192,6 +201,7 @@ private fun status(o: JSONObject) = StationStatus(
     topTags = o.optJSONArray("topTags")?.let { a -> (0 until a.length()).mapNotNull { enumOrNull<ReviewTag>(a.getString(it)) } }.orEmpty(),
     message = o.optString("message"),
     okCount = o.intOrNull("okCount"),
+    notice = if (o.has("notice") && !o.isNull("notice")) o.getString("notice") else null,
     chargers = o.optJSONArray("chargers")?.objects()?.map {
         ChargerStatus(
             chargerId = it.getString("chargerId"),

@@ -1,6 +1,7 @@
 package com.chargecheck.core.port
 
 import com.chargecheck.core.model.ChargeEvent
+import com.chargecheck.core.model.FailReason
 import com.chargecheck.core.model.GeoPoint
 import com.chargecheck.core.model.ReviewTag
 import com.chargecheck.core.model.SocSample
@@ -8,6 +9,7 @@ import com.chargecheck.core.model.Station
 import com.chargecheck.core.model.StationId
 import com.chargecheck.core.model.StationStatus
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import java.time.Instant
 
 /**
@@ -29,7 +31,8 @@ interface DrivingStatePort {
     fun isParked(): Flow<Boolean>
 }
 
-data class RouteTarget(val name: String, val location: GeoPoint, val poiId: String?)
+/** 내비 목적지·경유지. [remainM] = 내비가 알려 준 남은 도로 거리(m), 모르면 null. */
+data class RouteTarget(val name: String, val location: GeoPoint, val poiId: String?, val remainM: Int? = null)
 
 interface NaviPort {
     /** 기본 내비의 목적지·경유지 변화. */
@@ -39,6 +42,10 @@ interface NaviPort {
     suspend fun addWaypoint(target: RouteTarget): Result<Unit>
     /** 기본 내비에 목적지를 넘겨 길안내를 시작한다(지도 화면의 [여기로 안내]). Pleos: NaviHelper.requestRoute */
     suspend fun setDestination(target: RouteTarget): Result<Unit>
+    /** 지금 목적지(경유지 제외). 없으면 null. 기본 구현은 routeTargets의 마지막(목적지가 맨 뒤). */
+    fun destination(): Flow<RouteTarget?> = routeTargets().map { it.lastOrNull() }
+    /** 기본 내비의 장소 검색 화면을 검색어와 함께 연다. Pleos: requestNavigationScreen(SearchPlace) */
+    suspend fun openSearch(keyword: String): Result<Unit> = Result.failure(UnsupportedOperationException())
 }
 
 interface LocationPort {
@@ -58,6 +65,9 @@ interface ChargeCheckApiPort {
     suspend fun postEvent(event: ChargeEvent): Result<Unit>
     /** 이미 올린 실패 기록에 운전자가 고른 충전기 번호를 붙인다. PATCH /v1/events/{eventId} */
     suspend fun attachCharger(eventId: String, chargerId: String): Result<Unit>
+    /** 실패 기록의 충전기 번호·이유를 붙이거나 고친다(운전자가 다시 말한 경우). PATCH /v1/events/{eventId} */
+    suspend fun updateEvent(eventId: String, chargerId: String?, reason: FailReason?): Result<Unit> =
+        if (chargerId != null) attachCharger(eventId, chargerId) else Result.success(Unit)
     suspend fun stationStatus(id: StationId): Result<StationStatus>
     suspend fun nearbyStations(at: GeoPoint, radiusM: Int): Result<List<Station>>
     suspend fun alternatives(id: StationId, at: GeoPoint): Result<List<Pair<Station, StationStatus>>>

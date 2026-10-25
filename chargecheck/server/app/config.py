@@ -21,6 +21,7 @@ class Settings(BaseSettings):
 settings = Settings()
 
 # 판정 기준(명세 §5.4). 앱의 ChargeCheckConfig와 같은 값.
+BLOCKED_NOTICE_MIN = 60  # 일반차 주차 막힘 제보를 보여주는 시간(분)
 GREEN_WINDOW_H = 3
 LOOKBACK_H = 24
 DEDUP_WINDOW_H = 2

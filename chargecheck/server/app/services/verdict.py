@@ -7,7 +7,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-from app.config import GREEN_WINDOW_H, LOOKBACK_H, MAX_FAILS_PER_DEVICE_PER_DAY, PUBLIC_STAT_MAP, SLOW_CHARGER_TYPES
+from app.config import BLOCKED_NOTICE_MIN, GREEN_WINDOW_H, LOOKBACK_H, MAX_FAILS_PER_DEVICE_PER_DAY, PUBLIC_STAT_MAP, SLOW_CHARGER_TYPES
 
 
 @dataclass(frozen=True)
@@ -16,6 +16,7 @@ class EventIn:
     result: str  # SUCCESS / FAIL
     occurred_at: datetime
     charger_id: str | None = None
+    reason: str | None = None   # FAIL 이유. BLOCKED는 충전기 실패로 세지 않는다
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,7 @@ class StationVerdict:
     public_total: int
     ok_count: int
     chargers: list[ChargerVerdict] = field(default_factory=list)
+    notice: str | None = None
 
 
 def public_state(stat_code: str) -> str:
@@ -92,7 +94,21 @@ def _judge_charger(c: ChargerIn, own: list[EventIn], station_success: datetime |
     return ChargerVerdict(c.charger_id, charger_kind(c.chger_type), state, verdict, reason, fails, last_success)
 
 
+def _blocked_notice(events: list[EventIn], now: datetime) -> str | None:
+    """일반차 주차 막힘은 충전기 고장이 아니라 잠깐의 상황이다. 최근 BLOCKED_NOTICE_MIN분 안 제보만 안내한다."""
+    last = max((e.occurred_at for e in events if e.reason == "BLOCKED" and now - e.occurred_at <= timedelta(minutes=BLOCKED_NOTICE_MIN)), default=None)
+    if last is None:
+        return None
+    return f"{max(1, int((now - last).total_seconds() // 60))}분 전 일반차 주차 막힘 제보"
+
+
 def compute_verdict(chargers: list[ChargerIn], events: list[EventIn], now: datetime) -> StationVerdict:
+    v = _compute(chargers, [e for e in events if e.reason != "BLOCKED"], now)
+    v.notice = _blocked_notice(events, now)
+    return v
+
+
+def _compute(chargers: list[ChargerIn], events: list[EventIn], now: datetime) -> StationVerdict:
     events = _usable(events, now)
     by_charger: dict[str, list[EventIn]] = defaultdict(list)
     unassigned: list[EventIn] = []
@@ -116,7 +132,12 @@ def compute_verdict(chargers: list[ChargerIn], events: list[EventIn], now: datet
     # 번호 없는 실패도 어딘가의 충전기 하나로 보수적으로 뺀다
     ok_count = max(0, ok_count - unknown_fails)
 
+    # 최근 실패가 결제 문제였으면 따로 알려 준다(운영사 회원카드·앱 문제일 수 있어 고장과 구분)
+    payment = any(e.result == "FAIL" and e.reason == "PAYMENT" and (station_success is None or e.occurred_at > station_success) for e in events)
+
     def result(verdict: str, reason: str, message: str) -> StationVerdict:
+        if payment and verdict in ("RED", "YELLOW"):
+            message += " · 결제 실패 제보 포함"
         return StationVerdict(verdict, reason, message, station_success, recent_fail_count, public_available, total, ok_count, judged)
 
     if total > 0 and all(s == "OUT_OF_SERVICE" for s in states):

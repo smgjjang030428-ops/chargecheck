@@ -1,10 +1,7 @@
 package com.chargecheck.app
 
-import android.content.Context
-import android.content.pm.ApplicationInfo
+import android.content.Intent
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -12,174 +9,36 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
-import com.chargecheck.adapter.android.CarUxRestrictionsAdapter
-import com.chargecheck.adapter.pleos.PleosNaviAdapter
-import com.chargecheck.adapter.pleos.PleosVehicleAdapter
-import com.chargecheck.adapter.remote.RemoteApiAdapter
-import com.chargecheck.core.config.ChargeCheckConfig
-import com.chargecheck.core.model.NearbyStation
-import com.chargecheck.core.model.DeviceId
 import com.chargecheck.core.model.GeoPoint
-import com.chargecheck.core.model.Place
+import com.chargecheck.core.model.NearbyStation
 import com.chargecheck.core.model.RoutePlan
-import com.chargecheck.core.model.Station
 import com.chargecheck.core.model.distanceMetersTo
-import com.chargecheck.core.port.ClockPort
 import com.chargecheck.core.port.RouteTarget
-import com.chargecheck.feature.session.ChargeSessionMachine
-import com.chargecheck.feature.session.SessionCoordinator
 import com.chargecheck.feature.session.SessionInput
 import com.chargecheck.feature.session.SessionState
 import com.chargecheck.feature.session.stationId
-import com.chargecheck.feature.warning.ArrivalWarningCoordinator
 import com.chargecheck.feature.warning.reasonText
 import com.chargecheck.ui.MapStation
+import com.chargecheck.ui.RouteCardUi
 import com.chargecheck.ui.SearchUi
 import com.chargecheck.ui.StationMapScreen
 import com.chargecheck.ui.WarningUi
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
-import java.time.Duration
+import org.json.JSONObject
 import java.time.Instant
-import java.util.UUID
-
-/** 개발 PC에서 돌리는 서버. 에뮬레이터의 10.0.2.2 = PC의 127.0.0.1. 배포 서버가 생기면 release 값만 바꾼다. */
-private const val DEV_SERVER = "http://10.0.2.2:8000"
-
-/** 지도 기본 위치(강남역). 차 주변 5km에 충전소가 없으면 여기를 보여준다. */
-private val DEFAULT_AREA = GeoPoint(37.4979, 127.0276)
 
 /**
- * real flavor: Pleos Vehicle·NaviHelper·CarUxRestrictions 어댑터와 ChargeCheck 서버(RemoteApiAdapter)를
- * SessionCoordinator·ArrivalWarningCoordinator에 연결한다.
+ * real flavor 화면. 상태는 [RealGraph](프로세스에 하나)가 갖고, 여기서는 화면에 그리고 버튼을 연결만 한다.
+ * - 내비 목적지가 바뀌고 충전이 필요하면 RealGraph가 [RoutePlan]을 채운다 → 주차 중 패널, 주행 중 15초 카드.
+ * - 검색창은 충전소·지역 찾기(우리 DB). 충전소가 안 나오면 [내비에서 목적지 찾기].
  */
-private class RealGraph(context: Context) {
-    val clock = object : ClockPort {
-        override fun now(): Instant = Instant.now()
-    }
-    val vehicle = PleosVehicleAdapter(context, clock)
-    val drivingState = CarUxRestrictionsAdapter(context)
-    val navi = PleosNaviAdapter(context)
-    val api = RemoteApiAdapter(DEV_SERVER, deviceId(context))
-
-    /** 서버에서 받은 주변 충전소와 판정. 지도와 충전소 판별(resolve)이 같이 쓴다. */
-    val stations = MutableStateFlow<List<NearbyStation>>(emptyList())
-
-    /** 디버그 빌드는 에뮬레이터 확인용으로 판정 시간을 줄인다(정차 30초, 급속 정체 2분, 출발 확인 20초). */
-    val devTools = (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
-    private val config = if (devTools) {
-        ChargeCheckConfig(
-            onsiteMinStop = Duration.ofSeconds(30),
-            stallTimeoutFast = Duration.ofMinutes(2),
-            stallTimeoutSlow = Duration.ofMinutes(3),
-            waitExtension = Duration.ofMinutes(1),
-            retroMinElapsed = Duration.ofMinutes(2),
-            attemptMinStop = Duration.ofSeconds(20),
-        )
-    } else {
-        ChargeCheckConfig.DEFAULT
-    }
-
-    /** §4.8 StationResolver 자리: POI ID가 같거나 100m 이내인 충전소. */
-    val resolve: (RouteTarget) -> Station? = { target ->
-        val known = stations.value.map { it.station }
-        known.firstOrNull { it.id.value == target.poiId }
-            ?: known.minByOrNull { it.location.distanceMetersTo(target.location) }
-                ?.takeIf { it.location.distanceMetersTo(target.location) <= 100 }
-    }
-
-    val session = SessionCoordinator(
-        machine = ChargeSessionMachine(DeviceId(UUID.randomUUID().toString()), { UUID.randomUUID().toString() }, config),
-        vehicle = vehicle,
-        navi = navi,
-        location = navi,
-        api = api,
-        clock = clock,
-        resolveStation = resolve,
-        parked = drivingState.isParked(),
-    )
-    val warning = ArrivalWarningCoordinator(navi, api, navi, resolve, log = session::note)
-
-    val time = flow {
-        while (true) {
-            emit(Instant.now())
-            delay(5_000)
-        }
-    }
-
-    /** 차 주변 5km, 없으면 기본 지역의 충전소와 판정을 서버에서 받아온다. */
-    suspend fun refreshStations() {
-        val car = navi.lastKnown()
-        val near = car?.let { api.nearbyWithStatus(it, 5_000).getOrNull() }.orEmpty()
-        val list = near.ifEmpty { api.nearbyWithStatus(DEFAULT_AREA, 5_000).getOrNull().orEmpty() }
-        if (list.isNotEmpty() || stations.value.isEmpty()) stations.value = list
-    }
-
-    /** 지역·장소 검색. 내 차 근처(없으면 기본 지역) 기준으로 충전소 결과를 가까운 순으로. */
-    suspend fun search(query: String): SearchUi {
-        val q = query.trim()
-        if (q.isEmpty()) return SearchUi()
-        return api.searchPlaces(q, navi.lastKnown() ?: DEFAULT_AREA).fold(
-            onSuccess = { SearchUi(q, it, if (it.isEmpty()) "'$q' 검색 결과가 없어요" else null) },
-            onFailure = { SearchUi(q, emptyList(), "검색 서버에 연결하지 못했어요") },
-        )
-    }
-
-    /** 목적지까지 가는 길의 충전소. 차의 현재 위치·남은 주행 가능 거리·배터리를 함께 보낸다. */
-    suspend fun planRoute(to: Place): Result<RoutePlan> {
-        val from = navi.lastKnown() ?: DEFAULT_AREA
-        val range = vehicle.remainingRangeKm()
-        val soc = vehicle.currentSoc()
-        session.note("경로 충전소 요청: ${to.name} · 남은 주행 ${range?.let { "%.0fkm".format(it) } ?: "모름"} · 배터리 ${soc ?: "모름"}%")
-        return api.alongRoute(from, to, range, soc)
-    }
-
-    /** 기본 내비에 목적지를 넘기고, 충전소를 고르면 경유지로 넣는다. */
-    suspend fun go(plan: RoutePlan, viaId: String?) {
-        val dest = plan.destination
-        val ok = navi.setDestination(RouteTarget(dest.name, dest.location, dest.stationId?.value)).isSuccess
-        session.note("내비 목적지 요청: ${dest.name}" + if (ok) "" else " — 실패")
-        val via = plan.candidates.firstOrNull { it.stop.station.id.value == viaId }?.stop?.station ?: return
-        delay(1_500) // 목적지 경로 계산이 시작된 뒤에 경유지를 넣는다
-        val added = navi.addWaypoint(RouteTarget(via.name, via.location, via.id.value)).isSuccess
-        session.note("경유지 추가: ${via.name}" + if (added) "" else " — 실패")
-    }
-
-    fun release() {
-        session.stop()
-        warning.stop()
-        vehicle.release()
-        navi.release()
-    }
-
-    private fun deviceId(context: Context): DeviceId {
-        // 설치마다 한 번 만드는 임의 UUID. 서버에는 해시로만 저장된다(명세 §5.3).
-        val prefs = context.getSharedPreferences("chargecheck", Context.MODE_PRIVATE)
-        val id = prefs.getString("device_id", null) ?: UUID.randomUUID().toString().also { prefs.edit().putString("device_id", it).apply() }
-        return DeviceId(id)
-    }
-}
-
 @Composable
 fun FlavorContent() {
     val context = LocalContext.current
-    val graph = remember { RealGraph(context.applicationContext) }
+    val graph = remember { RealGraph.get(context) }
     val scope = rememberCoroutineScope()
     var selected by remember { mutableStateOf<String?>(null) }
     var search by remember { mutableStateOf(SearchUi()) }
-    var plan by remember { mutableStateOf<RoutePlan?>(null) }
-
-    LaunchedEffect(Unit) {
-        graph.session.start(this, graph.time)
-        graph.warning.start(this)
-        while (true) {
-            graph.refreshStations()
-            delay(30_000)
-        }
-    }
-    DisposableEffect(Unit) { onDispose { graph.release() } }
 
     val state by graph.session.state.collectAsState()
     val question by graph.session.question.collectAsState()
@@ -188,19 +47,15 @@ fun FlavorContent() {
     val log by graph.session.log.collectAsState()
     val warning by graph.warning.warning.collectAsState()
     val stations by graph.stations.collectAsState()
+    val plan by graph.plan.collectAsState()
+    val routeCardOnDriving by graph.routeCardOnDriving.collectAsState()
     val parked by remember { graph.drivingState.isParked() }.collectAsState(initial = true)
     val car by remember { graph.navi.locations() }.collectAsState(initial = null)
     val confirm by graph.session.confirm.collectAsState()
 
-    // 경로를 보고 있으면 경로 위 충전소를, 아니면 주변 충전소를 지도에 찍는다
-    val shown = plan?.let { p ->
-        p.candidates.map { c ->
-            val (s, info, st) = c.stop
-            MapStation(s.id.value, s.name, s.location, st.verdict, st.message.ifBlank { reasonText(st.reasonCode) }, info, st.chargers, highlight = s.id == p.recommendedId)
-        }
-    } ?: stations.map { (s, info, st) ->
-        MapStation(s.id.value, s.name, s.location, st.verdict, st.message.ifBlank { reasonText(st.reasonCode) }, info, st.chargers)
-    }
+    // 경로 카드가 열려 있으면 경로 근처 충전소를, 아니면 주변 충전소를 지도에 찍는다
+    val shown = plan?.let { p -> p.candidates.map { c -> c.stop.toMap(highlight = c.stop.station.id == p.recommendedId) } }
+        ?: stations.map { it.toMap() }
 
     StationMapScreen(
         stations = shown,
@@ -214,13 +69,16 @@ fun FlavorContent() {
         log = log,
         uploads = emptyList(),
         devTools = graph.devTools,
-        onSelect = { selected = it },
+        onSelect = { id ->
+            selected = id
+            if (id == null && plan == null) scope.launch { graph.clearFocus() }
+        },
         onNavigate = { id ->
-            val p = plan
             selected = null
+            val p = plan
             if (p != null) {
-                plan = null
-                scope.launch { graph.go(p, id) }
+                // 경로 카드에서 고른 충전소 = 경유지로 들르기(목적지는 이미 내비에 있음)
+                p.candidates.firstOrNull { it.stop.station.id.value == id }?.let { c -> scope.launch { graph.addStop(c.stop.station) } }
                 return@StationMapScreen
             }
             val s = stations.first { it.station.id.value == id }.station
@@ -253,28 +111,33 @@ fun FlavorContent() {
         onQueryChange = { search = search.copy(query = it) },
         onSearch = {
             val q = search.query
-            search = search.copy(results = emptyList(), message = "검색 중…")
+            search = search.copy(results = emptyList(), message = "찾는 중…", naviQuery = null)
             scope.launch { search = graph.search(q) }
         },
         onPickPlace = { place ->
-            search = SearchUi(query = place.name, message = "가는 길의 충전소를 찾는 중…")
-            selected = null
+            search = SearchUi(query = place.name)
             scope.launch {
-                graph.planRoute(place).fold(
-                    onSuccess = { plan = it; search = SearchUi(query = place.name) },
-                    onFailure = { search = SearchUi(query = place.name, message = "경로를 받지 못했어요. 잠시 후 다시 시도해 주세요") },
-                )
+                graph.focus(place)
+                selected = place.stationId?.value
+            }
+        },
+        onNaviSearch = { q ->
+            search = SearchUi()
+            scope.launch {
+                val ok = graph.navi.openSearch(q).isSuccess
+                graph.session.note("내비 검색 화면 요청: $q" + if (ok) "" else " — 실패")
             }
         },
         plan = plan,
         onRouteGo = { id ->
             val p = plan ?: return@StationMapScreen
-            plan = null
             selected = null
-            search = SearchUi()
-            scope.launch { graph.go(p, id) }
+            p.candidates.firstOrNull { it.stop.station.id.value == id }?.let { c -> scope.launch { graph.addStop(c.stop.station) } }
         },
-        onRouteClose = { plan = null; selected = null; search = SearchUi() },
+        onRouteClose = {
+            selected = null
+            graph.dismissRoute()
+        },
         confirm = confirm,
         onConfirm = { yes -> scope.launch { graph.session.answerConfirm(yes) } },
         // 지금 세션의 충전소이거나, 차가 150m 안에 있을 때만(현장에 있었던 차만 표시)
@@ -287,5 +150,53 @@ fun FlavorContent() {
             selected = null
             if (s != null) scope.launch { graph.session.reportFail(s); graph.refreshStations() }
         },
+        routeCard = plan?.takeIf { routeCardOnDriving }?.toCard(),
+        onRouteCard = { go ->
+            val p = plan
+            val rec = p?.candidates?.firstOrNull { it.stop.station.id == p.recommendedId }
+            if (go && rec != null) scope.launch { graph.addStop(rec.stop.station) } else graph.dismissRoute()
+        },
+        devExtra = if (graph.devTools) {
+            // 운전자가 내비에 일반 목적지를 넣은 상황을 재현(에뮬레이터 내비는 자체 검색이 안 될 수 있음)
+            listOf("목적지 바꾸기" to { scope.launch { graph.navi.setDestination(DEV_DESTINATIONS[devDestination++ % DEV_DESTINATIONS.size]) }; Unit }) +
+                gleoMocks(context)
+        } else {
+            emptyList()
+        },
+    )
+}
+
+private fun NearbyStation.toMap(highlight: Boolean = false): MapStation {
+    val reason = status.message.ifBlank { reasonText(status.reasonCode) } + (status.notice?.let { " · $it" } ?: "")
+    return MapStation(station.id.value, station.name, station.location, status.verdict, reason, info, status.chargers, highlight)
+}
+
+/** 주행 중 15초 카드: "가는 길에 충전이 필요해요" + 추천 충전소 한 줄. */
+private fun RoutePlan.toCard(): RouteCardUi {
+    val rec = candidates.firstOrNull { it.stop.station.id == recommendedId }
+        ?: return RouteCardUi("충전 없이는 못 가요", "가는 길에 갈 수 있는 충전소가 없어요", canGo = false)
+    val why = rec.stop.status.message.ifBlank { reasonText(rec.stop.status.reasonCode) }
+    return RouteCardUi("가는 길에 충전이 필요해요", "${rec.alongKm.toInt()}km 지점 ${rec.stop.station.name} · $why", canGo = true)
+}
+
+/** 디버그 빌드: 운전자가 내비에 넣는 일반 목적지(번갈아). */
+private val DEV_DESTINATIONS = listOf(
+    RouteTarget("서울특별시청", GeoPoint(37.5663, 126.9779), null),
+    RouteTarget("수원역", GeoPoint(37.2664, 127.0001), null),
+)
+private var devDestination = 0
+
+/**
+ * 디버그 빌드 전용: 글레오가 보내는 것과 같은 형식(액션 = 기능 이름, ACTION_PARAM = JSON)으로 우리 앱에 보낸다.
+ * 에뮬레이터에 글레오가 없거나 승인 전이어도 음성 흐름을 시연할 수 있다. 대답은 판단 기록에 남는다.
+ */
+private fun gleoMocks(context: android.content.Context): List<Pair<String, () -> Unit>> {
+    fun send(function: String, params: JSONObject) = context.sendBroadcast(
+        Intent(function).setPackage(context.packageName).putExtra("ACTION_PARAM", params.toString()),
+    )
+    return listOf(
+        "글레오: 가는 길 충전소?" to { send("CHECK_CHARGERS", JSONObject().put("scope", "route")) },
+        "글레오: 들렀다 가자" to { send("ADD_CHARGER_STOP", JSONObject().put("scope", "route")) },
+        "글레오: 3번 결제 안 돼" to { send("REPORT_CHARGER_PROBLEM", JSONObject().put("problem", "PAYMENT").put("charger_number", "3")) },
     )
 }

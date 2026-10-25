@@ -79,7 +79,7 @@ data class RouteCandidate(
 
 /**
  * 목적지까지의 경로와 들를 수 있는 충전소(GET /v1/stations/along-route).
- * [needsCharge] = 남은 주행 가능 거리(15% 여유)로 목적지까지 못 감. [roadRoute] = false면 직선 근사.
+ * [needsCharge] = 남은 주행 가능 거리(15% 여유)로 목적지까지 못 감. [roadRoute] = false면 경로 근처 어림(외부 경로 서버 없음).
  */
 data class RoutePlan(
     val destination: Place,
@@ -109,9 +109,17 @@ data class StationStatus(
     /** 실패 판정·운영중지가 아닌 충전기 수. */
     val okCount: Int? = null,
     val chargers: List<ChargerStatus> = emptyList(),
+    /** 판정과 별개인 임시 안내(예: "20분 전 일반차 주차 막힘 제보"). */
+    val notice: String? = null,
 )
 
 enum class ChargeResult { SUCCESS, FAIL }
+
+/**
+ * 실패 이유. BLOCKED(일반차 주차)는 서버가 충전기 실패로 세지 않는다.
+ * 케이블 짧음·느림 같은 불편은 실패가 아니라 리뷰 태그로 보낸다.
+ */
+enum class FailReason { NOT_CHARGING, BROKEN, PAYMENT, BLOCKED, OTHER }
 
 /** LIVE = 현장에서 실시간, RETRO = 재시동 때 비교, MANUAL = 운전자가 상세 카드에서 직접 표시. */
 enum class DetectMode { LIVE, RETRO, MANUAL }
@@ -129,6 +137,8 @@ data class ChargeEvent(
     val occurredAt: Instant,
     /** 몇 번 충전기였는지. 차는 알 수 없으므로 보통 null이고, 실패 뒤 운전자가 고르면 attachCharger로 붙인다. */
     val chargerId: String? = null,
+    /** 실패 이유. 자동 감지는 모르므로 null, 운전자가 말하거나 고르면 채운다. */
+    val reason: FailReason? = null,
 )
 
 data class SocSample(val pct: Int, val at: Instant)

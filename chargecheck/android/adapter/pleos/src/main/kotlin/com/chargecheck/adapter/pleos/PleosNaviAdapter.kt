@@ -6,6 +6,7 @@ import ai.pleos.playground.navi.constants.WaypointIndex
 import ai.pleos.playground.navi.data.CurrentLocationInfo
 import ai.pleos.playground.navi.data.DestinationArrivedInfo
 import ai.pleos.playground.navi.data.DestinationInfo
+import ai.pleos.playground.navi.data.NavigationScreenRequest
 import ai.pleos.playground.navi.data.RequestWaypointInfo
 import ai.pleos.playground.navi.data.RouteInfo
 import ai.pleos.playground.navi.data.WaypointArrivedInfo
@@ -23,7 +24,9 @@ import com.chargecheck.core.port.RouteTarget
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.map
 
 private const val TAG = "ChargeCheck/Pleos"
 private const val POLL_MS = 10_000L
@@ -57,7 +60,7 @@ class PleosNaviAdapter(context: Context) : NaviPort, LocationPort {
             Log.d(TAG, "목적지: ${info.name} (${info.latitude}, ${info.longitude}) poi=${info.poiId}")
             // 길안내가 없으면 이름이 비고 좌표가 (0, 0)으로 온다
             destination = if (info.latitude == 0.0 && info.longitude == 0.0) null
-            else RouteTarget(info.name, GeoPoint(info.latitude, info.longitude), info.poiId)
+            else RouteTarget(info.name, GeoPoint(info.latitude, info.longitude), info.poiId, info.remainDistance.takeIf { it > 0 })
             publish()
         }
 
@@ -139,6 +142,12 @@ class PleosNaviAdapter(context: Context) : NaviPort, LocationPort {
         navi.requestRoute(
             RouteInfo(target.location.lat, target.location.lon, null, null, target.name, target.poiId ?: "", "", "", RouteOption.RECOMMENDED, "", false),
         )
+    }
+
+    override fun destination(): Flow<RouteTarget?> = targets.map { destination }.distinctUntilChanged()
+
+    override suspend fun openSearch(keyword: String): Result<Unit> = runCatching {
+        navi.requestNavigationScreen(NavigationScreenRequest.SearchPlace(keyword))
     }
 
     override fun locations(): Flow<GeoPoint> = location.filterNotNull()

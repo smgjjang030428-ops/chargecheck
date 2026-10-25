@@ -136,3 +136,20 @@ def test_직접_표시한_실패_MANUAL도_실패로_센다(client):
 def test_모르는_모드는_거절(client):
     body = {**event("FAIL"), "mode": "GUESS"}
     assert client.post("/v1/events", json=body, headers=headers()).status_code == 422
+
+
+def test_실패_이유를_저장하고_10분_안에_고칠_수_있다(client):
+    body = {**event("FAIL", station="ME000003"), "reason": "BLOCKED"}
+    client.post("/v1/events", json=body, headers=headers())
+    st = client.get("/v1/stations/ME000003/status").json()
+    assert st["recentFailCount"] == 0 and "주차 막힘" in st["notice"]
+    r = client.patch(f"/v1/events/{body['eventId']}", json={"reason": "BROKEN", "chargerId": "01"}, headers=headers())
+    assert r.status_code == 200
+    st = client.get("/v1/stations/ME000003/status").json()
+    assert st["recentFailCount"] == 1 and st["notice"] is None
+
+
+def test_고칠_내용이_없으면_거절(client):
+    body = event("FAIL")
+    client.post("/v1/events", json=body, headers=headers())
+    assert client.patch(f"/v1/events/{body['eventId']}", json={}, headers=headers()).status_code == 422

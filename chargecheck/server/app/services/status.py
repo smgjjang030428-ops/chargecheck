@@ -50,7 +50,7 @@ def station_status(session: Session, stat_id: str, now: datetime | None = None) 
     ).all()
     v = compute_verdict(
         [ChargerIn(c.chger_id, c.chger_type, c.public_stat) for c in chargers],
-        [EventIn(e.device_hash, e.result, as_utc(e.occurred_at), e.chger_id) for e in events],
+        [EventIn(e.device_hash, e.result, as_utc(e.occurred_at), e.chger_id, e.reason) for e in events],
         now,
     )
     rows = {c.chger_id: c for c in chargers}
@@ -80,4 +80,5 @@ def station_status(session: Session, stat_id: str, now: datetime | None = None) 
             for c in v.chargers
         ],
         top_tags=top_tags,
+        notice=v.notice,
     )

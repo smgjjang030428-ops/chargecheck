@@ -3,6 +3,7 @@ package com.chargecheck.feature.session
 import com.chargecheck.core.model.ChargeEvent
 import com.chargecheck.core.model.ChargeResult
 import com.chargecheck.core.model.ChargerStatus
+import com.chargecheck.core.model.FailReason
 import com.chargecheck.core.model.GeoPoint
 import com.chargecheck.core.model.Station
 import com.chargecheck.core.model.StationId
@@ -51,7 +52,7 @@ data class FailConfirm(
 
 /**
  * 포트의 Flow를 [SessionInput]으로 바꿔 [ChargeSessionMachine.reduce]에 넣고, 나온 [Effect]를 실행한다.
- * 상태는 [state]로 UI에 노출한다. (문서/앱구조_명세서_AI용.md §4.7 끝)
+ * 상태는 [state]로 UI에 노출한다. (기획문서/앱구조_명세서_AI용.md §4.7 끝)
  *
  * @param resolveStation 내비 목적지가 충전소인지 판별한다. §4.8 StationResolver가 생기기 전까지의 자리.
  * @param parked 주차(true)·주행(false). 주차→주행이면 [SessionInput.Departing]을 넣고, 못 받은 실패 확인을 다음 주차 때 다시 띄운다.
@@ -186,10 +187,25 @@ class SessionCoordinator(
      * 상세 카드의 [여기 충전 안 됐어요]. 현장(최근 충전소 근처)에 있었는지는 화면 쪽에서 확인하고 부른다.
      * 같은 충전소의 확인 질문이 떠 있으면 이 답으로 대신한다.
      */
-    suspend fun reportFail(station: Station): Boolean {
+    suspend fun reportFail(station: Station, reason: FailReason? = null, chargerId: String? = null): Boolean {
         if (_confirm.value?.event?.stationId == station.id) _confirm.value = null
-        log("직접 표시: ${station.name} 충전 안 됨")
-        return upload(machine.manualFail(station, vehicle.currentSoc(), clock.now()), station.name)
+        val detail = listOfNotNull(reason?.name, chargerId?.let { "${it}번" })
+        log("직접 표시: ${station.name} 충전 안 됨" + if (detail.isEmpty()) "" else " (${detail.joinToString(", ")})")
+        return upload(machine.manualFail(station, vehicle.currentSoc(), clock.now(), reason, chargerId), station.name)
+    }
+
+    /** 마지막으로 서버에 올라간 실패 기록. 운전자가 이유·번호를 다시 말하면 이걸 고친다. */
+    var lastFail: ChargeEvent? = null
+        private set
+
+    /** 같은 충전소의 최근 실패 기록에 충전기 번호·이유를 붙이거나 고친다. */
+    suspend fun amendLastFail(chargerId: String?, reason: FailReason?): Boolean {
+        val e = lastFail ?: return false
+        val ok = api.updateEvent(e.eventId, chargerId, reason).isSuccess
+        if (ok) lastFail = e.copy(chargerId = chargerId ?: e.chargerId, reason = reason ?: e.reason)
+        log("기록 고침: " + listOfNotNull(reason?.name, chargerId?.let { "${it}번" }).joinToString(", ") + if (ok) "" else " — 서버 반영 실패")
+        if (ok && chargerId != null && _chargerPick.value?.eventId == e.eventId) _chargerPick.value = null
+        return ok
     }
 
     /** 충전기 번호 선택. null이면 "모르겠어요"(건너뜀). */
@@ -273,7 +289,11 @@ class SessionCoordinator(
             else -> " — 실패, 재시도 대기"
         }
         log("서버 기록: ${e.result} (${e.mode}, SOC ${e.socStart}→${e.socEnd}%)$note")
-        if (r.isSuccess && e.result == ChargeResult.FAIL) offerChargerPick(e.eventId, e.stationId, stationName)
+        if (r.isSuccess && e.result == ChargeResult.FAIL) {
+            lastFail = e
+            // 번호를 이미 말했으면 다시 묻지 않는다
+            if (e.chargerId == null) offerChargerPick(e.eventId, e.stationId, stationName)
+        }
         return r.isSuccess
     }
 

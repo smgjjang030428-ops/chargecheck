@@ -128,7 +128,7 @@ python -m venv .venv && .venv\Scripts\python -m pip install -r requirements.txt
 │  ├─ core/                  데이터 모델·인터페이스·설정값
 │  ├─ feature/               충전 판단(session), 도착 전 경고, 평가, 완료 알림
 │  └─ adapter/               Pleos SDK·Android·서버·가짜 데이터 구현
-└─ 문서/                    앱 구조 명세서, 다이어그램 PDF
+└─ 기획문서/                  앱 구조 명세서, 다이어그램 PDF
 ```
 
-자세한 설계는 [`문서/앱구조_명세서_AI용.md`](문서/앱구조_명세서_AI용.md)에 있습니다.
+자세한 설계는 [`기획문서/앱구조_명세서_AI용.md`](기획문서/앱구조_명세서_AI용.md)에 있습니다.

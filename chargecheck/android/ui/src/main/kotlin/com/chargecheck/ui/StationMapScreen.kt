@@ -108,9 +108,14 @@ fun StationMapScreen(
     onConfirm: (Boolean) -> Unit = {},
     canReport: (String) -> Boolean = { false },
     onReportFail: (String) -> Unit = {},
+    routeCard: RouteCardUi? = null,
+    onRouteCard: (Boolean) -> Unit = {},
+    onNaviSearch: (String) -> Unit = {},
+    /** 디버그 빌드 전용 버튼(글레오 흉내 등). */
+    devExtra: List<Pair<String, () -> Unit>> = emptyList(),
 ) {
     if (!parked) {
-        DrivingScreen(state, warning, onWarningChoice, confirm, onConfirm)
+        DrivingScreen(state, warning, onWarningChoice, confirm, onConfirm, routeCard, onRouteCard)
         return
     }
     Box(Modifier.fillMaxSize().background(Bg).padding(24.dp)) {
@@ -123,7 +128,7 @@ fun StationMapScreen(
                     val report = if (plan == null && canReport(s.id)) onReportFail else null
                     StationCard(Modifier.align(Alignment.BottomCenter).padding(16.dp), s, label, onNavigate, { onSelect(null) }, report)
                 }
-                SearchBox(Modifier.align(Alignment.TopStart).padding(16.dp), search, onQueryChange, onSearch, onPickPlace)
+                SearchBox(Modifier.align(Alignment.TopStart).padding(16.dp), search, onQueryChange, onSearch, onPickPlace, onNaviSearch)
             }
             Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(20.dp)) {
                 if (plan != null) {
@@ -134,8 +139,12 @@ fun StationMapScreen(
                     LogPanel(Modifier.weight(1f).fillMaxWidth(), log)
                 }
                 if (devTools) {
-                    OutlinedButton(onClick = onDevArrive, modifier = Modifier.fillMaxWidth()) {
-                        Text("개발용: 목적지 도착 처리", color = TextSub, fontSize = 16.sp)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        (listOf("도착 처리" to onDevArrive) + devExtra).forEach { (label, action) ->
+                            OutlinedButton(onClick = action, modifier = Modifier.weight(1f)) {
+                                Text(label, color = TextSub, fontSize = 14.sp, maxLines = 1)
+                            }
+                        }
                     }
                 }
             }

@@ -6,7 +6,7 @@
 >
 > 작성일: 2026-10-24 · 대상: 현대자동차그룹 차량용 앱 개발 공모전 (Pleos Connect)
 >
-> **파일 위치**: 이 문서는 `문서/앱구조_명세서_AI용.md`에 있다. 이 문서에 나오는 코드 경로(`android/`, `server/`, `tools/`)는 모두 프로젝트 최상위의 `chargecheck/` 폴더 아래 경로다. 예: `android/feature/session` = `chargecheck/android/feature/session`. 코드 폴더 경로에는 한글을 쓰지 않는다(Windows에서 Gradle 테스트가 실패함).
+> **파일 위치**: 이 문서는 `기획문서/앱구조_명세서_AI용.md`에 있다. 이 문서에 나오는 코드 경로(`android/`, `server/`, `tools/`)는 모두 프로젝트 최상위의 `chargecheck/` 폴더 아래 경로다. 예: `android/feature/session` = `chargecheck/android/feature/session`. 코드 폴더 경로에는 한글을 쓰지 않는다(Windows에서 Gradle 테스트가 실패함).
 
 ---
 
@@ -488,6 +488,17 @@ sequenceDiagram
 - 결제 수단은 공공 API에 필드가 없다(2026-10-24 확인). 지어내지 않고 "공공 데이터에 결제 정보 없음 · 운영사 확인: {운영기관} {연락처}"로 안내한다. 서버 `StationOut.payment`는 확인된 정보가 생기면 채우는 자리(지금은 null).
 - 커넥터 방식은 공공 `chgerType` 코드를 서버 `CONNECTOR_MAP`으로 바꾼다. ⚠️ 코드표는 활용가이드로 최종 확인 필요.
 
+- **운전자 경험 개편(2026-10-25 2차, 구현·에뮬레이터 확인)** — 원칙: 확인된 기능만 필수, 모르는 건 있으면 쓰는 기능, 운전자는 평소대로.
+  - **내비 목적지 자동 감지**: `NaviPort.destination()`이 바뀌면 `RealGraph.onDestination`이 판단한다. 목적지가 충전소면 F3에 맡기고, 이미 충전소가 경유지로 들어 있으면 생략, 아니면 `/v1/stations/along-route`(내비 남은 거리 `remainDistance`를 `roadKm`으로) → `shouldShowRouteCard`(feature:warning)가 true일 때만 카드. 충전 없이 갈 수 있으면 조용히 있는다. 길안내 재시작 때 내비가 잠깐 '목적지 없음'을 보내므로 마지막 목적지를 잊지 않는다.
+  - **카드**: 주차 중엔 `RoutePanel`([들렀다 가기]=경유지만 추가, [괜찮아요]), 주행 중엔 `DrivingScreen` 경로 카드 — 패널에 답하지 않고 **출발한 순간부터 15초**, 같은 카드는 한 번만. 우선순위: 경고 > 출발 확인 > 경로 카드. '괜찮아요' 2번 연속이면 정말 못 갈 때만 띄움.
+  - **검색창 = 충전소·지역 찾기**: 우리 DB(이름·주소, 낱말 AND)만. 결과를 고르면 그 주변 충전소를 보여주고 상세 카드를 연다. 충전소가 안 나오면 [내비에서 '…' 목적지 찾기](`NaviPort.openSearch` → NaviHelper `requestNavigationScreen(SearchPlace)`, 에뮬레이터 미확인).
+  - **충전소 짝짓기**(`matchStation`): POI ID → 100m 안 하나 → 여럿이면 이름이 겹치는 곳(‘충전소’ 같은 일반 낱말 제외), 애매하면 null(엉뚱한 경고 방지).
+  - **에뮬레이터 내비**: 부팅 직후엔 모든 요청에 "navi not ready". **내비 앱을 한 번 앞으로 띄우면 준비**되고, 그 뒤엔 목적지·경유지 읽기와 실제 경로 안내(경유지 포함)가 동작한다(10/25 확인).
+- **글레오 AI 연동(Gleo Interface, 2026-10-25 구현)**: `app/src/real/assets/schema.json`(기능 3개, component=service) + `GleoActionReceiver`(액션 = 기능 이름, `ACTION_PARAM` JSON) → `GleoActions` → `APP_ACTION_RESPONSE`(`functionName`, `status` success/asking/fail, 영어 `message`, `data`) 6초 안에.
+  - `CHECK_CHARGERS`(scope route/nearby/destination, min_kw, free_parking, connector) / `ADD_CHARGER_STOP`(방금 추천한 곳, 10분) / `REPORT_CHARGER_PROBLEM`(problem, charger_number). 케이블 짧음·느림은 리뷰 태그, 나머지는 실패 기록(같은 충전소 2시간 안이면 새로 올리지 않고 이유·번호를 고침).
+  - 버튼과 같은 기능을 부른다(입력 방법이 하나 더 있을 뿐). 디버그 빌드에 "글레오 흉내" 버튼 3개(같은 형식의 브로드캐스트).
+  - **에뮬레이터 확인**: 글레오 에이전트(`[GAA]`, `ai.pleos.gleoai.model.provider`)가 부팅 때 우리 `schema.json`을 읽었고, 우리 `APP_ACTION_RESPONSE`를 받아 해석했다(글레오가 먼저 부른 액션이 아니라 Sleeping 상태라 거절). 실제 음성 호출과 승인 조건은 미확인.
+
 - **지역 검색 + 가는 길 충전소(2026-10-25 구현·에뮬레이터 확인)**: 목적지를 고르면 차의 현재 위치·남은 주행 가능 거리·SOC를 서버 `/v1/stations/along-route`에 보내고, 경로 위 믿을 만한 급속 충전소를 받는다. 기본 내비도 주행 가능 거리를 넘으면 충전소를 넣어 주지만, 우리는 **실패 기록이 많은 곳(RED)·운영 중지만 있는 곳을 빼고** 판정 색과 도착 배터리로 고르게 하는 것이 차이다. [들렀다 가기] = `setDestination(목적지)` → 1.5초 뒤 `addWaypoint(충전소)`. 에뮬레이터 기본 내비는 경로를 그리지 않아(기존 확인 사항) SDK 호출 성공까지만 확인.
 
 - 상태 색: GREEN=초록, YELLOW=노랑, RED=빨강, GRAY=회색. 다른 곳에 색을 쓰지 않는다.
@@ -624,17 +635,18 @@ server/
 | GET | `/v1/stations/{stationId}/alternatives?lat=&lon=` | — | `{station: StationOut, status: StationStatusOut, distanceM: int}[]` (GREEN 우선, 최대 3개, 5km 이내) |
 | POST | `/v1/reviews` | `{stationId, tags: ReviewTag[]}` | `202` |
 | PATCH | `/v1/events/{eventId}` | `{"chargerId": "02"}` | `200` — 실패 기록 뒤 운전자가 고른 충전기 번호를 붙인다(같은 기기만) |
-| GET | `/v1/places/search?q=&lat=&lon=` | — | `PlaceOut[]` — 일반 장소(지도 서비스, 300m 안 같은 이름은 하나만) + 이름·주소가 맞는 충전소 최대 6곳(가까운 순). `kind`: PLACE / STATION |
-| GET | `/v1/stations/along-route?fromLat&fromLon&toLat&toLon&rangeKm&soc&fastOnly=true` | — | `AlongRouteOut` (아래) |
+| GET | `/v1/places/search?q=&lat=&lon=` | — | `PlaceOut[]` — **충전소·지역 찾기(우리 DB만, 10/25 개편)**: 낱말마다 이름이나 주소에 들어 있는 충전소 최대 10곳(가까운 순). `kind`는 STATION. 일반 목적지는 차의 내비가 담당 |
+| GET | `/v1/stations/along-route?fromLat&fromLon&toLat&toLon&rangeKm&soc&fastOnly=true&roadKm=` | — | `AlongRouteOut` (아래). `roadKm` = 내비가 알려 준 남은 도로 거리 |
 | GET | `/healthz` | — | `200 {"ok": true}` |
 
-**가는 길 충전소 (2026-10-25 추가, `services/along.py`)**
-1. 경로: OSRM 도로 경로(`source: ROAD`), 실패하면 직선(`STRAIGHT`).
-2. 경로를 2km마다 찍어 1.5km 안 충전소를 모으고, 경로에 투영해 `alongKm`(출발점에서 경로를 따라간 거리)·`detourM`(경로 이탈)을 구한다.
-3. 판정 RED, 쓸 수 있는 충전기 없음(운영 중지·RED만), 버스 전용, (`fastOnly`) 급속 없음은 뺀다. 5km 구간마다 가장 좋은 곳 하나(판정 색 → 정상 충전기 수 → 이탈 거리).
+**가는 길 충전소 (2026-10-25 추가 → 같은 날 외부 경로 서버 제거, `services/along.py`)**
+1. 외부 지도·경로 서버를 쓰지 않는다(`source: CORRIDOR`). 실제 길은 차의 내비가 짠다.
+2. 출발지~목적지 직선을 2km마다 찍어 띠(직선 20km 미만 1.5km, 이상 3km) 안 충전소를 모으고, 직선에 투영한 거리를 도로 거리로 환산해 `alongKm`으로 쓴다(`roadKm`이 있으면 그 비율, 없으면 × 1.3).
+3. 판정 RED, 쓸 수 있는 충전기 없음(운영 중지·RED만), 버스 전용, (`fastOnly`) 급속 없음은 뺀다. 5km 구간마다 가장 좋은 곳 하나(갈 수 있음 → 판정 색 → 빈 충전기 있음 → 정상 충전기 수 → 이탈 거리).
 4. `reachable` = `alongKm ≤ rangeKm × 0.85`, `arrivalSoc` = `soc × (1 − alongKm / rangeKm)`, `needsCharge` = 경로 길이 > `rangeKm × 0.85`.
-5. 충전이 필요하면 `recommendedId` = 갈 수 있는 곳 중 GREEN 우선, 그다음 가장 먼 곳(한 번 충전으로 최대한 멀리).
-- 외부 서비스(Nominatim·OSRM 공개 서버)는 개발·시연용. 출시 전 카카오·네이버·티맵 등 이용 허락된 API로 바꾼다. 실패해도 앱은 멈추지 않는다(장소 없음 / 직선 근사).
+5. 충전이 필요하면 `recommendedId` = 갈 수 있는 곳 중 GREEN 우선, 빈 충전기 있는 곳 우선, 그다음 가장 먼 곳(한 번 충전으로 최대한 멀리).
+
+**실패 이유 (2026-10-25)**: `ChargeEventIn.reason` = NOT_CHARGING / BROKEN / PAYMENT / BLOCKED / OTHER(선택). `PATCH /v1/events/{id}`는 `chargerId`·`reason` 중 하나 이상을 붙이거나 고친다. 판정: **BLOCKED(일반차 주차 막힘)는 실패 수에서 빼고** `StationStatusOut.notice`("20분 전 일반차 주차 막힘 제보", 60분)로만 알린다. PAYMENT는 실패로 세되 문구에 "결제 실패 제보 포함". 기존 DB에는 시작할 때 `ensure_columns`가 `reason` 칼럼을 더한다.
 
 ```jsonc
 // AlongRouteOut
