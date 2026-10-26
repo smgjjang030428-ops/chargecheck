@@ -44,8 +44,8 @@ import java.time.Instant
 import java.util.UUID
 import kotlin.math.roundToInt
 
-/** 개발 PC에서 돌리는 서버. 에뮬레이터의 10.0.2.2 = PC의 127.0.0.1. 배포 서버가 생기면 release 값만 바꾼다. */
-private const val DEV_SERVER = "http://10.0.2.2:8000"
+/** debug는 개발 PC 서버, release는 배포 서버(app/build.gradle.kts). */
+private val SERVER = BuildConfig.SERVER_URL
 
 /** 지도 기본 위치(강남역). 차 위치를 모르면 여기를 보여준다. */
 internal val DEFAULT_AREA = GeoPoint(37.4979, 127.0276)
@@ -84,7 +84,7 @@ internal class RealGraph private constructor(context: Context) {
     val navi = PleosNaviAdapter(context)
     private val prefs = context.getSharedPreferences("chargecheck", Context.MODE_PRIVATE)
     val settings = AppSettings(context)
-    val api = RemoteApiAdapter(DEV_SERVER, deviceId(), store = object : KeyValueStore {
+    val api = RemoteApiAdapter(SERVER, deviceId(), store = object : KeyValueStore {
         override fun get(key: String): String? = prefs.getString(key, null)
         override fun put(key: String, value: String?) = prefs.edit().putString(key, value).apply()
     })

@@ -5,26 +5,43 @@
 - POST /v1/operator/alerts/{id}/ack  운영사가 확인함
 - GET  /v1/operator/summary      운영사별 열린 알림 수·해결까지 걸린 시간
 - GET  /operator                 운영사용 웹 화면
+
+OPERATOR_KEY를 설정하면 /v1/operator/* 는 X-Operator-Key 헤더(또는 ?key=)가 맞아야 한다.
+웹 화면은 /operator?key=… 로 열면 그 키를 붙여 부른다.
 """
 import csv
 import io
+import secrets
 from collections import defaultdict
 from datetime import timedelta
 from pathlib import Path
 from statistics import median
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import HTMLResponse, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.db import get_session
 from app.models import Charger, FaultAlert, Station
 from app.schemas import AlertOut, OperatorSummaryOut
 from app.services.status import as_utc, utcnow
 from app.services.verdict import public_state
 
+
+
+def operator_key(
+    x_operator_key: str | None = Header(None, alias="X-Operator-Key"),
+    key: str | None = Query(None),
+) -> None:
+    expected = settings.OPERATOR_KEY
+    if expected and not secrets.compare_digest((x_operator_key or key or "").encode(), expected.encode()):
+        raise HTTPException(401, "운영사 접근 키가 필요합니다")
+
+
 router = APIRouter(tags=["operator"])
+api = APIRouter(tags=["operator"], dependencies=[Depends(operator_key)])
 
 PAGE = Path(__file__).resolve().parent.parent / "static" / "operator.html"
 
@@ -66,7 +83,7 @@ def _query(session: Session, operator: str | None, status: str, limit: int) -> l
     return out
 
 
-@router.get("/v1/operator/alerts", response_model=list[AlertOut])
+@api.get("/v1/operator/alerts", response_model=list[AlertOut])
 def list_alerts(
     operator: str | None = None,
     status: str = Query("open", pattern="^(open|resolved|all)$"),
@@ -76,7 +93,7 @@ def list_alerts(
     return _query(session, operator, status, limit)
 
 
-@router.get("/v1/operator/alerts.csv")
+@api.get("/v1/operator/alerts.csv")
 def alerts_csv(
     operator: str | None = None,
     status: str = Query("all", pattern="^(open|resolved|all)$"),
@@ -98,7 +115,7 @@ def alerts_csv(
                     headers={"Content-Disposition": "attachment; filename=chargecheck_alerts.csv"})
 
 
-@router.post("/v1/operator/alerts/{alert_id}/ack", response_model=AlertOut)
+@api.post("/v1/operator/alerts/{alert_id}/ack", response_model=AlertOut)
 def ack_alert(alert_id: int, session: Session = Depends(get_session)):
     a = session.get(FaultAlert, alert_id)
     if a is None:
@@ -109,7 +126,7 @@ def ack_alert(alert_id: int, session: Session = Depends(get_session)):
     return next(x for x in _query(session, None, "all", 1000) if x.alert_id == alert_id)
 
 
-@router.get("/v1/operator/summary", response_model=list[OperatorSummaryOut])
+@api.get("/v1/operator/summary", response_model=list[OperatorSummaryOut])
 def summary(days: int = Query(7, ge=1, le=90), session: Session = Depends(get_session)):
     since = utcnow() - timedelta(days=days)
     stats: dict[str, dict] = defaultdict(lambda: {"open": 0, "in_repair": 0, "resolved": 0, "minutes": []})

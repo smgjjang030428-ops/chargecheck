@@ -63,6 +63,13 @@ const STATUS = { OPEN: "처리 전", IN_REPAIR: "점검 중", RESOLVED: "해결"
 const RESOLUTION = { USER_SUCCESS: "운전자 충전 성공", PUBLIC_CHARGING: "다른 차 충전 중(공공 데이터)", OPERATOR_STATUS: "운영사 상태 복구", EXPIRED: "기간 만료(24시간)" };
 const REASON = { NOT_CHARGING: "충전 안 됨", BROKEN: "고장", PAYMENT: "결제", OTHER: "기타", UNKNOWN: "이유 모름" };
 const $ = (id) => document.getElementById(id);
+// /operator?key=… 로 열면 그 키를 API 호출에 붙인다(서버에 OPERATOR_KEY가 있을 때)
+const KEY = new URLSearchParams(location.search).get("key") || "";
+const call = async (url, opts = {}) => {
+  const r = await fetch(url, { ...opts, headers: { "X-Operator-Key": KEY } });
+  if (r.status === 401) throw new Error("접근 키가 필요합니다. 받은 주소(/operator?key=…)로 열어 주세요.");
+  return r;
+};
 const time = (s) => s ? new Date(s).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
@@ -70,11 +77,19 @@ async function load() {
   const op = $("operator").value, st = $("status").value;
   const q = new URLSearchParams({ status: st });
   if (op) q.set("operator", op);
-  $("csv").href = "/v1/operator/alerts.csv?" + q;
-  const [alerts, summary] = await Promise.all([
-    fetch("/v1/operator/alerts?" + q).then((r) => r.json()),
-    fetch("/v1/operator/summary").then((r) => r.json()),
-  ]);
+  $("csv").href = "/v1/operator/alerts.csv?" + new URLSearchParams({ ...Object.fromEntries(q), ...(KEY ? { key: KEY } : {}) });
+  let alerts, summary;
+  try {
+    [alerts, summary] = await Promise.all([
+      call("/v1/operator/alerts?" + q).then((r) => r.json()),
+      call("/v1/operator/summary").then((r) => r.json()),
+    ]);
+  } catch (e) {
+    $("rows").innerHTML = "";
+    $("empty").hidden = false;
+    $("empty").textContent = e.message;
+    return;
+  }
   const known = new Set([...$("operator").options].map((o) => o.value));
   summary.forEach((s) => { if (!known.has(s.operator)) $("operator").add(new Option(s.operator, s.operator)); });
   const mine = op ? summary.filter((s) => s.operator === op) : summary;
@@ -94,6 +109,7 @@ async function load() {
       <td>${a.resolvedAt ? `${time(a.resolvedAt)}<div class="sub">${RESOLUTION[a.resolution] || ""} · ${a.minutesToResolve}분</div>` : (a.inRepairAt ? `점검 시작 ${time(a.inRepairAt)}` : "")}</td>
       <td>${!a.ackedAt && a.status !== "RESOLVED" ? `<button data-ack="${a.alertId}">확인함</button>` : ""}</td>
     </tr>`).join("");
+  $("empty").textContent = "표시할 알림이 없어요";
   $("empty").hidden = alerts.length > 0;
   $("updated").textContent = "갱신 " + new Date().toLocaleTimeString("ko-KR");
 }
@@ -101,7 +117,7 @@ async function load() {
 $("rows").addEventListener("click", async (e) => {
   const id = e.target.dataset.ack;
   if (!id) return;
-  await fetch(`/v1/operator/alerts/${id}/ack`, { method: "POST" });
+  await call(`/v1/operator/alerts/${id}/ack`, { method: "POST" });
   load();
 });
 ["operator", "status"].forEach((id) => $(id).addEventListener("change", load));

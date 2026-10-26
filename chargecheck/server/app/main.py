@@ -71,6 +71,7 @@ app.include_router(stations.router)
 app.include_router(reviews.router)
 app.include_router(places.router)
 app.include_router(operators.router)
+app.include_router(operators.api)
 
 
 @app.get("/healthz")

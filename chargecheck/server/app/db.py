@@ -16,19 +16,22 @@ def make_engine(url: str):
     return create_engine(url, connect_args=args)
 
 
-engine = make_engine(settings.DATABASE_URL)
+engine = make_engine(settings.database_url)
 SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 
 
 # 테이블이 이미 있으면 create_all이 새 칼럼을 만들지 않는다. 마이그레이션 도구 없이 쓰는 동안의 최소 보정.
 NEW_COLUMNS = {
     "charge_event": {"reason": "VARCHAR"},
-    "charger": {"last_charging_at": "DATETIME", "repaired_at": "DATETIME"},
+    "charger": {"last_charging_at": "TIMESTAMP", "repaired_at": "TIMESTAMP"},
 }
+# PostgreSQL의 TIMESTAMP는 시간대가 없으므로 모델(DateTime(timezone=True))과 맞춘다.
+PG_TYPES = {"TIMESTAMP": "TIMESTAMP WITH TIME ZONE"}
 
 
 def ensure_columns(eng) -> None:
     insp = inspect(eng)
+    pg = eng.dialect.name == "postgresql"
     with eng.begin() as conn:
         for table, cols in NEW_COLUMNS.items():
             if not insp.has_table(table):
@@ -36,6 +39,8 @@ def ensure_columns(eng) -> None:
             have = {c["name"] for c in insp.get_columns(table)}
             for name, sql_type in cols.items():
                 if name not in have:
+                    if pg:
+                        sql_type = PG_TYPES.get(sql_type, sql_type)
                     conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}"))
 
 

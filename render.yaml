@@ -1,0 +1,23 @@
+# Render 블루프린트: 대시보드 > New > Blueprint 에서 이 저장소를 고르면 서버가 만들어진다.
+# DB는 Neon 무료 PostgreSQL(만료 없음)을 쓰고, 그 주소를 DATABASE_URL에 넣는다. 자세한 순서는 chargecheck/server/DEPLOY.md
+services:
+  - type: web
+    name: chargecheck
+    runtime: docker
+    rootDir: chargecheck/server
+    dockerfilePath: ./Dockerfile
+    plan: free
+    region: singapore        # 한국에서 가장 가까운 무료 지역
+    healthCheckPath: /healthz
+    autoDeploy: true
+    envVars:
+      - key: DATABASE_URL    # Neon 연결 주소(postgresql://…). 직접 붙여넣는다
+        sync: false
+      - key: PUBLIC_API_KEY  # 공공데이터포털 인증키. 직접 붙여넣는다
+        sync: false
+      - key: PUBLIC_ZCODES
+        value: ALL
+      - key: DEVICE_SALT     # Render가 임의 값을 만든다. 바꾸면 기존 기기 구분이 끊기니 그대로 둔다
+        generateValue: true
+      - key: OPERATOR_KEY    # 운영사 화면 접근 키. Render가 만든다
+        generateValue: true

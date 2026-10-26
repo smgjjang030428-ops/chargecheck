@@ -90,3 +90,21 @@ def test_새_알림은_운영사_웹훅으로_보낸다(client, monkeypatch):
     [(url, body)] = sent
     assert url == "https://example.test/hook"
     assert (body["stationId"], body["chargerId"], body["failDevices"]) == (STATION, "01", 2)
+
+
+def test_운영사_키를_설정하면_키_없이는_리포트를_볼_수_없다(client, monkeypatch):
+    from app.config import settings
+    monkeypatch.setattr(settings, "OPERATOR_KEY", "op-key-for-test")
+    assert client.get("/v1/operator/alerts").status_code == 401
+    assert client.get("/v1/operator/alerts", headers={"X-Operator-Key": "wrong"}).status_code == 401
+    assert client.get("/v1/operator/alerts", headers={"X-Operator-Key": "op-key-for-test"}).status_code == 200
+    assert client.get("/v1/operator/alerts.csv?key=op-key-for-test").status_code == 200
+    assert client.get("/operator").status_code == 200  # 화면 자체는 열리고, 데이터는 키가 있어야 받는다
+    assert client.get("/healthz").status_code == 200   # 차량 앱이 쓰는 API는 키와 무관
+
+
+def test_호스팅이_주는_postgres_주소를_psycopg_주소로_바꾼다():
+    from app.config import Settings
+    assert Settings(DATABASE_URL="postgres://u:p@h/db").database_url == "postgresql+psycopg://u:p@h/db"
+    assert Settings(DATABASE_URL="postgresql://u:p@h/db").database_url == "postgresql+psycopg://u:p@h/db"
+    assert Settings(DATABASE_URL="sqlite:///./x.db").database_url == "sqlite:///./x.db"

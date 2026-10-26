@@ -18,6 +18,17 @@ class Settings(BaseSettings):
     STATUS_SYNC_MINUTES: int = 5
     # 운영사 고장 알림을 받을 주소(선택). 새 고장 의심이 생기면 JSON을 POST한다. 비우면 보내지 않는다.
     OPERATOR_WEBHOOK_URL: str = ""
+    # 운영사 리포트 접근 키. 배포에서는 반드시 채운다. 비우면 누구나 볼 수 있다(로컬 개발용).
+    OPERATOR_KEY: str = ""
+
+    @property
+    def database_url(self) -> str:
+        """호스팅이 주는 postgres:// 주소를 SQLAlchemy가 쓰는 psycopg 3 드라이버 주소로 바꾼다."""
+        url = self.DATABASE_URL
+        for prefix in ("postgres://", "postgresql://"):
+            if url.startswith(prefix):
+                return "postgresql+psycopg://" + url[len(prefix):]
+        return url
 
 
 settings = Settings()
