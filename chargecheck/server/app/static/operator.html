@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>차지체크 고장 리포트</title>
+<style>
+  :root { --bg:#f6f7f8; --panel:#fff; --text:#16181a; --sub:#6b7076; --line:#e3e5e8; --red:#d64541; --yellow:#c99700; --green:#2e9e5b; --blue:#2b6fd6; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#121314; --panel:#1e2022; --text:#ecedee; --sub:#9a9ea3; --line:#2c2f32; } }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:15px/1.5 system-ui, -apple-system, "Malgun Gothic", sans-serif; }
+  header { padding:20px 24px 8px; }
+  h1 { margin:0; font-size:22px; }
+  header p { margin:4px 0 0; color:var(--sub); }
+  main { padding:12px 24px 32px; display:grid; gap:16px; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px; overflow-x:auto; }
+  .bar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  select, button, a.btn { font:inherit; padding:6px 12px; border-radius:8px; border:1px solid var(--line); background:var(--panel); color:var(--text); text-decoration:none; cursor:pointer; }
+  table { width:100%; border-collapse:collapse; min-width:820px; }
+  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--sub); font-weight:600; font-size:13px; white-space:nowrap; }
+  .tag { display:inline-block; white-space:nowrap; padding:1px 8px; border-radius:999px; font-size:12px; font-weight:600; color:#fff; }
+  .OPEN { background:var(--red); } .IN_REPAIR { background:var(--yellow); } .RESOLVED { background:var(--green); }
+  .sub { color:var(--sub); font-size:13px; }
+  .kpis { display:flex; flex-wrap:wrap; gap:12px; }
+  .kpi { min-width:140px; }
+  .kpi b { display:block; font-size:24px; }
+  .empty { color:var(--sub); padding:24px 0; text-align:center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>차지체크 고장 리포트</h1>
+  <p>운전자 차량이 실제 충전 결과로 알려 준 고장 의심 충전기. 운영사 상태가 바뀌거나 누군가 충전하면 자동으로 해결 처리돼요.</p>
+</header>
+<main>
+  <section class="panel">
+    <div class="bar">
+      <label>운영사 <select id="operator"><option value="">전체</option></select></label>
+      <label>상태
+        <select id="status">
+          <option value="open">처리 전·점검 중</option>
+          <option value="resolved">해결됨</option>
+          <option value="all">전체</option>
+        </select>
+      </label>
+      <button id="reload">새로고침</button>
+      <a class="btn" id="csv" href="/v1/operator/alerts.csv">CSV 받기</a>
+      <span class="sub" id="updated"></span>
+    </div>
+  </section>
+  <section class="panel"><div class="kpis" id="kpis"></div></section>
+  <section class="panel">
+    <table>
+      <thead><tr><th>상태</th><th>충전소</th><th>충전기</th><th>실패 제보</th><th>열린 시각</th><th>해결</th><th></th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div class="empty" id="empty" hidden>표시할 알림이 없어요</div>
+  </section>
+</main>
+<script>
+const STATUS = { OPEN: "처리 전", IN_REPAIR: "점검 중", RESOLVED: "해결" };
+const RESOLUTION = { USER_SUCCESS: "운전자 충전 성공", PUBLIC_CHARGING: "다른 차 충전 중(공공 데이터)", OPERATOR_STATUS: "운영사 상태 복구", EXPIRED: "기간 만료(24시간)" };
+const REASON = { NOT_CHARGING: "충전 안 됨", BROKEN: "고장", PAYMENT: "결제", OTHER: "기타", UNKNOWN: "이유 모름" };
+const $ = (id) => document.getElementById(id);
+const time = (s) => s ? new Date(s).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "";
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+async function load() {
+  const op = $("operator").value, st = $("status").value;
+  const q = new URLSearchParams({ status: st });
+  if (op) q.set("operator", op);
+  $("csv").href = "/v1/operator/alerts.csv?" + q;
+  const [alerts, summary] = await Promise.all([
+    fetch("/v1/operator/alerts?" + q).then((r) => r.json()),
+    fetch("/v1/operator/summary").then((r) => r.json()),
+  ]);
+  const known = new Set([...$("operator").options].map((o) => o.value));
+  summary.forEach((s) => { if (!known.has(s.operator)) $("operator").add(new Option(s.operator, s.operator)); });
+  const mine = op ? summary.filter((s) => s.operator === op) : summary;
+  const sum = (k) => mine.reduce((a, s) => a + s[k], 0);
+  const med = mine.map((s) => s.medianMinutesToResolve).filter((m) => m != null);
+  $("kpis").innerHTML = [
+    ["처리 전", sum("open")], ["점검 중", sum("inRepair")], ["최근 7일 해결", sum("resolved")],
+    ["해결까지(중앙값)", med.length ? Math.round(med.sort((a, b) => a - b)[Math.floor(med.length / 2)]) + "분" : "-"],
+  ].map(([k, v]) => `<div class="kpi"><span class="sub">${k}</span><b>${v}</b></div>`).join("");
+  $("rows").innerHTML = alerts.map((a) => `
+    <tr>
+      <td><span class="tag ${a.status}">${STATUS[a.status]}</span></td>
+      <td>${esc(a.stationName)}<div class="sub">${esc(a.address)} · ${esc(a.operator)}</div></td>
+      <td>${a.chargerId ? esc(a.chargerId) + "번" : "번호 모름"}<div class="sub">${a.publicState ? "공공 상태 " + a.publicState : ""}</div></td>
+      <td>${a.failDevices}대<div class="sub">${Object.entries(a.reasons).map(([k, v]) => (REASON[k] || k) + " " + v).join(", ")} · 마지막 ${time(a.lastFailAt)}</div></td>
+      <td>${time(a.openedAt)}${a.ackedAt ? `<div class="sub">확인 ${time(a.ackedAt)}</div>` : ""}</td>
+      <td>${a.resolvedAt ? `${time(a.resolvedAt)}<div class="sub">${RESOLUTION[a.resolution] || ""} · ${a.minutesToResolve}분</div>` : (a.inRepairAt ? `점검 시작 ${time(a.inRepairAt)}` : "")}</td>
+      <td>${!a.ackedAt && a.status !== "RESOLVED" ? `<button data-ack="${a.alertId}">확인함</button>` : ""}</td>
+    </tr>`).join("");
+  $("empty").hidden = alerts.length > 0;
+  $("updated").textContent = "갱신 " + new Date().toLocaleTimeString("ko-KR");
+}
+
+$("rows").addEventListener("click", async (e) => {
+  const id = e.target.dataset.ack;
+  if (!id) return;
+  await fetch(`/v1/operator/alerts/${id}/ack`, { method: "POST" });
+  load();
+});
+["operator", "status"].forEach((id) => $(id).addEventListener("change", load));
+$("reload").addEventListener("click", load);
+load();
+setInterval(load, 60000);
+</script>
+</body>
+</html>

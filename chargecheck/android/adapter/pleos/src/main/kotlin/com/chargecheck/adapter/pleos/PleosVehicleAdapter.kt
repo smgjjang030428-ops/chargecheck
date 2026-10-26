@@ -17,7 +17,7 @@ import kotlin.coroutines.resume
 private const val TAG = "ChargeCheck/Pleos"
 
 /**
- * Pleos Vehicle SDK로 구동 배터리 SOC를 읽는다. (기획문서/앱구조_명세서_AI용.md §4.14)
+ * Pleos Vehicle SDK로 구동 배터리 SOC를 읽는다. (기획문서/차지체크_앱_구동_기획.md §3)
  * 권한: pleos.car.permission.CAR_ENERGY(SOC), pleos.car.permission.CAR_DRIVE(남은 주행 가능 거리).
  * 주행 중 여부는 기어가 아니라 CarUxRestrictions로 판단한다(adapter:android의 CarUxRestrictionsAdapter).
  */

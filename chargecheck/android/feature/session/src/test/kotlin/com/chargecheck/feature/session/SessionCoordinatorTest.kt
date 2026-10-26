@@ -134,6 +134,18 @@ class SessionCoordinatorTest {
     }
 
     @Test
+    fun `도착 뒤 잔량 신호가 하나도 없어도(충전 안 됨) 지금 잔량을 읽어 판정한다`() = runTest(UnconfinedTestDispatcher()) {
+        // 실제 차: 잔량 신호는 값이 바뀔 때만 온다. 꽂아도 안 되면 도착 뒤 신호가 없다(에뮬레이터에서 발견)
+        socNow = 42
+        coordinator.start(backgroundScope, now)
+        arrivals.emit(target)
+        now.value = at(5)
+        assertIs<SessionState.Monitoring>(coordinator.state.value)
+        now.value = at(15)
+        assertIs<SessionState.Asking>(coordinator.state.value)
+    }
+
+    @Test
     fun `충전기 번호를 모르면 건너뛸 수 있다`() = runTest(UnconfinedTestDispatcher()) {
         coordinator.start(backgroundScope, now)
         arrivals.emit(target)

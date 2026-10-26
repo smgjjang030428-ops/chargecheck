@@ -36,10 +36,7 @@ if (androidSdkAvailable) {
     include(
         ":app",
         ":ui",
-        ":core:data",
         ":feature:warning",
-        ":feature:review",
-        ":feature:complete",
         ":adapter:pleos",
         ":adapter:android",
         ":adapter:remote",

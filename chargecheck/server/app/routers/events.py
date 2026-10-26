@@ -9,6 +9,7 @@ from app.db import get_session
 from app.deps import device_hash
 from app.models import ChargeEvent
 from app.schemas import AcceptedOut, AttachChargerIn, ChargeEventIn
+from app.services import alerts
 from app.services.status import utcnow
 
 router = APIRouter(prefix="/v1/events", tags=["events"])
@@ -19,7 +20,7 @@ def post_event(body: ChargeEventIn, response: Response, device: str = Depends(de
     # 멱등성: 같은 eventId는 한 번만(앱이 재시도해도 안전)
     if session.get(ChargeEvent, body.event_id) is not None:
         return AcceptedOut(accepted=False, reason="DUPLICATE")
-    # 같은 기기·충전소는 2시간에 1건만 인정(명세 §5.4 중복·악용 방지)
+    # 같은 기기·충전소는 2시간에 1건만 인정(기획 §6 중복·악용 방지)
     window_start = body.occurred_at - timedelta(hours=DEDUP_WINDOW_H)
     dup = session.scalars(
         select(ChargeEvent.event_id).where(
@@ -48,6 +49,7 @@ def post_event(body: ChargeEventIn, response: Response, device: str = Depends(de
         )
     )
     session.commit()
+    alerts.refresh_station(session, body.station_id)  # 실패가 쌓이면 운영사 알림, 성공이면 알림 해제
     response.status_code = 202
     return AcceptedOut(accepted=True)
 
@@ -65,4 +67,5 @@ def attach_charger(event_id: str, body: AttachChargerIn, device: str = Depends(d
     if body.reason is not None and event.result == "FAIL":
         event.reason = body.reason
     session.commit()
+    alerts.refresh_station(session, event.stat_id)
     return AcceptedOut(accepted=True)

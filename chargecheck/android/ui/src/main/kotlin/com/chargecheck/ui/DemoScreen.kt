@@ -51,7 +51,7 @@ import java.time.format.DateTimeFormatter
 /** 시나리오 버튼 하나. */
 data class DemoScenarioItem(val id: String, val title: String)
 
-// 상태 색은 명세 §4.10 규칙대로 GREEN·YELLOW·RED·GRAY만 쓴다. 나머지는 무채색.
+// 상태 색은 기획 §9 규칙대로 GREEN·YELLOW·RED·GRAY만 쓴다. 나머지는 무채색.
 internal val Bg = Color(0xFF121314)
 internal val Panel = Color(0xFF1E2022)
 internal val TextMain = Color(0xFFECEDEE)

@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-    <!-- 기획문서/앱구조_명세서_AI용.md §4.13 -->
+    <!-- 기획문서/차지체크_앱_구동_기획.md §9 -->
     <uses-permission android:name="pleos.car.permission.CAR_ENERGY" />
     <uses-permission android:name="pleos.car.permission.CAR_DRIVE" />
     <uses-permission android:name="pleos.car.permission.NAVI_ROUTE" />
@@ -15,7 +15,8 @@
     <uses-feature android:name="android.hardware.type.automotive" android:required="true" />
 
     <application
-        android:label="차지체크"
+        android:icon="@mipmap/ic_launcher"
+        android:label="@string/app_name"
         android:supportsRtl="true">
         <activity
             android:name=".MainActivity"

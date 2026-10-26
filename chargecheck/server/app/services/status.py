@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app.config import BUS_ONLY_TYPES, CONNECTOR_MAP, LOOKBACK_H
 from app.models import ChargeEvent, Charger, Review, Station
 from app.schemas import ChargerStatusOut, StationOut, StationStatusOut
-from app.services.verdict import ChargerIn, EventIn, compute_verdict
+from app.services.verdict import ChargerIn, EventIn, StationVerdict, compute_verdict
 
 
 def utcnow() -> datetime:
@@ -36,8 +36,12 @@ def station_out(s: Station) -> StationOut:
     )
 
 
-def station_status(session: Session, stat_id: str, now: datetime | None = None) -> StationStatusOut:
-    now = now or utcnow()
+def _opt_utc(t: datetime | None) -> datetime | None:
+    return as_utc(t) if t is not None else None
+
+
+def station_verdict(session: Session, stat_id: str, now: datetime) -> tuple[list[Charger], list[ChargeEvent], StationVerdict]:
+    """충전소 하나의 충전기(버스전용 제외)·최근 기록을 읽어 판정한다. 상태 API와 운영사 알림이 같이 쓴다."""
     chargers = [
         c for c in session.scalars(select(Charger).where(Charger.stat_id == stat_id).order_by(Charger.chger_id)).all()
         if c.chger_type not in BUS_ONLY_TYPES
@@ -49,10 +53,16 @@ def station_status(session: Session, stat_id: str, now: datetime | None = None) 
         )
     ).all()
     v = compute_verdict(
-        [ChargerIn(c.chger_id, c.chger_type, c.public_stat) for c in chargers],
+        [ChargerIn(c.chger_id, c.chger_type, c.public_stat, _opt_utc(c.last_charging_at), _opt_utc(c.repaired_at)) for c in chargers],
         [EventIn(e.device_hash, e.result, as_utc(e.occurred_at), e.chger_id, e.reason) for e in events],
         now,
     )
+    return chargers, list(events), v
+
+
+def station_status(session: Session, stat_id: str, now: datetime | None = None) -> StationStatusOut:
+    now = now or utcnow()
+    chargers, _, v = station_verdict(session, stat_id, now)
     rows = {c.chger_id: c for c in chargers}
     reviews = session.scalars(select(Review.tags).where(Review.stat_id == stat_id, Review.created_at >= now - timedelta(days=30))).all()
     top_tags = [t for t, _ in Counter(tag for tags in reviews for tag in tags).most_common(3)]

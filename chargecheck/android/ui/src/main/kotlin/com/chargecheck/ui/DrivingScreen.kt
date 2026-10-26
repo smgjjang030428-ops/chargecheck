@@ -61,7 +61,7 @@ fun DrivingScreen(
         Text(
             "주행 중 · 지도와 상세 정보는 정차하면 열려요",
             color = TextSub,
-            fontSize = 22.sp,
+            fontSize = 24.sp,
             modifier = Modifier.align(Alignment.TopStart),
         )
         Column(Modifier.align(Alignment.Center).fillMaxWidth(0.85f)) {
@@ -93,7 +93,7 @@ private fun DrivingStatus(state: SessionState) {
         is SessionState.AskingRetro -> state.snap.stationName
     }
     Row(verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.size(28.dp).clip(CircleShape).background(Gray))
+        Box(Modifier.size(36.dp).clip(CircleShape).background(Gray))
         Spacer(Modifier.size(20.dp))
         Text(state.label(), color = TextMain, fontSize = DrivingTitle, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
@@ -160,7 +160,7 @@ private fun DrivingWarning(warning: WarningUi, onChoice: (VoiceIntent) -> Unit) 
     val badge = if (warning.verdict == Verdict.RED) Red else Yellow
     Column(Modifier.fillMaxWidth().clip(RoundedCornerShape(24.dp)).background(Panel).padding(36.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(Modifier.size(28.dp).clip(CircleShape).background(badge))
+            Box(Modifier.size(36.dp).clip(CircleShape).background(badge))
             Spacer(Modifier.size(20.dp))
             Text("실패 기록이 있는 충전소예요", color = TextMain, fontSize = DrivingTitle, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }

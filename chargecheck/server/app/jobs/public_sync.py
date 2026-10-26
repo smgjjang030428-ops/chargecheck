@@ -1,4 +1,4 @@
-"""한국환경공단 전기차 충전소 API 동기화 (명세 §5.5).
+"""한국환경공단 전기차 충전소 API 동기화 (기획 §10).
 
 - 충전소·충전기 목록: getChargerInfo (시·도 코드별, 페이지 단위)
 - 상태 변경분:       getChargerStatus (period분 이내 변경분)
@@ -23,6 +23,7 @@ from sqlalchemy.orm import Session
 from app.config import SLOW_CHARGER_TYPES, settings
 from app.db import Base, SessionLocal, engine
 from app.models import Charger, Station
+from app.services.verdict import public_state
 
 log = logging.getLogger("public_sync")
 # httpx는 요청 URL을 INFO로 남기는데 URL에 serviceKey가 들어 있다. 키가 로그에 남지 않게 막는다.
@@ -205,8 +206,15 @@ def apply_status(session: Session, rows: list[dict]) -> int:
         prev = charger.stat_upd_dt if charger.stat_upd_dt is None or charger.stat_upd_dt.tzinfo else charger.stat_upd_dt.replace(tzinfo=timezone.utc)
         if upd is not None and prev is not None and upd < prev:
             continue  # 늦게 도착한 옛 상태는 무시
+        before = public_state(charger.public_stat)
         charger.public_stat = str(row.get("stat", charger.public_stat))
         charger.stat_upd_dt = upd or charger.stat_upd_dt
+        # 바뀐 순간을 남긴다: '충전 중'이 됨 = 누군가 실제로 충전, '점검 → 사용 가능' = 수리됐을 수 있음
+        at = upd or datetime.now(timezone.utc)
+        if charger.public_stat == "3" and before != "CHARGING":
+            charger.last_charging_at = at
+        if before == "OUT_OF_SERVICE" and public_state(charger.public_stat) in ("AVAILABLE", "CHARGING"):
+            charger.repaired_at = at
         changed += 1
     session.commit()
     return changed

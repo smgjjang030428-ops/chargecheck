@@ -50,7 +50,7 @@ data class Scenario(
 )
 
 /**
- * 시나리오를 배속으로 재생해 FakeClock과 각 Fake 포트에 값을 흘려보낸다. (§4.15)
+ * 시나리오를 배속으로 재생해 FakeClock과 각 Fake 포트에 값을 흘려보낸다. (기획 §3)
  * 마지막 단계 뒤에도 시계는 계속 흐른다(정체 판정·질문 시간이 지나가도록).
  */
 class ScenarioPlayer(
@@ -130,7 +130,7 @@ private fun Station.target() = RouteTarget(name, location, id.value)
 
 private fun GeoPoint.northBy(meters: Int) = GeoPoint(lat + meters / 111_000.0, lon)
 
-/** 시연용 필수 시나리오 6개. (§4.15) 시간 단위는 분으로 적고 초로 바꾼다. */
+/** 시연용 필수 시나리오 6개. (기획 §3) 시간 단위는 분으로 적고 초로 바꾼다. */
 object DemoScenarios {
     val gangnamFast = Station(StationId("ME000001"), "강남 급속충전소", GeoPoint(37.4979, 127.0276), ChargerType.FAST)
     val yeoksamFast = Station(StationId("ME000003"), "역삼 급속충전소", GeoPoint(37.5006, 127.0364), ChargerType.FAST)

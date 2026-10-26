@@ -30,7 +30,7 @@ data class ArrivalWarning(
 
 /**
  * F3 도착 전 경고. 내비 목적지가 충전소로 바뀌면 판정을 조회하고, YELLOW·RED면 경고와 대체 충전소를 띄운다.
- * (기획문서/앱구조_명세서_AI용.md §4.9)
+ * (기획문서/차지체크_앱_구동_기획.md §6)
  *
  * - 목적지가 바뀔 때 1회만 경고한다. 같은 충전소로 반복 경고하지 않는다.
  * - GREEN·GRAY면 말하지 않는다.
@@ -42,6 +42,8 @@ class ArrivalWarningCoordinator(
     private val location: LocationPort,
     private val resolveStation: (RouteTarget) -> Station?,
     private val log: (String) -> Unit = {},
+    /** 설정에서 '도착 전 경고'를 끄면 false. 꺼져 있으면 판정을 조회하지 않는다. */
+    private val enabled: () -> Boolean = { true },
 ) {
     private val _warning = MutableStateFlow<ArrivalWarning?>(null)
     val warning: StateFlow<ArrivalWarning?> = _warning.asStateFlow()
@@ -54,7 +56,7 @@ class ArrivalWarningCoordinator(
         job = scope.launch {
             navi.routeTargets().collect { targets ->
                 val station = targets.firstNotNullOfOrNull(resolveStation) ?: return@collect
-                if (station.id == lastChecked) return@collect
+                if (station.id == lastChecked || !enabled()) return@collect
                 lastChecked = station.id
                 check(station)
             }
@@ -102,12 +104,13 @@ class ArrivalWarningCoordinator(
 }
 
 /**
- * 경고는 RED, 또는 일부 충전기만의 문제가 아닌 YELLOW에만 띄운다(명세 §5.4).
+ * 경고는 RED, 또는 일부 충전기만의 문제가 아닌 YELLOW에만 띄운다(기획 §6).
  * 충전기 몇 대만 실패하고 나머지가 쓸 수 있으면 운전을 방해하지 않는다.
  */
 fun shouldWarn(status: StationStatus): Boolean = when (status.verdict) {
     Verdict.RED -> true
-    Verdict.YELLOW -> status.reasonCode != ReasonCode.SOME_CHARGERS_FAIL
+    // 일부 충전기만 실패했거나, 운영사가 수리 상태로 바꾼 곳은 겁주지 않는다
+    Verdict.YELLOW -> status.reasonCode != ReasonCode.SOME_CHARGERS_FAIL && status.reasonCode != ReasonCode.REPAIRED_UNCONFIRMED
     Verdict.GREEN, Verdict.GRAY -> false
 }
 
@@ -119,4 +122,7 @@ fun reasonText(code: ReasonCode): String = when (code) {
     ReasonCode.PUBLIC_OUT_OF_SERVICE -> "공공 정보상 고장·점검 중이에요"
     ReasonCode.PUBLIC_SAYS_OK_BUT_FAILS -> "공공 정보는 '사용 가능'인데 실제로는 실패 기록이 있어요"
     ReasonCode.NO_RECENT_DATA -> "최근 기록이 없어요"
+    ReasonCode.PUBLIC_CHARGING -> "최근 다른 차가 충전했어요(운영사 데이터)"
+    ReasonCode.OLD_FAILS -> "몇 시간 전 실패 제보가 있고 그 뒤 확인 기록이 없어요"
+    ReasonCode.REPAIRED_UNCONFIRMED -> "운영사 상태가 '사용 가능'으로 바뀌었어요(수리됐을 수 있음)"
 }

@@ -21,7 +21,10 @@ SessionLocal = sessionmaker(bind=engine, expire_on_commit=False)
 
 
 # 테이블이 이미 있으면 create_all이 새 칼럼을 만들지 않는다. 마이그레이션 도구 없이 쓰는 동안의 최소 보정.
-NEW_COLUMNS = {"charge_event": {"reason": "VARCHAR"}}
+NEW_COLUMNS = {
+    "charge_event": {"reason": "VARCHAR"},
+    "charger": {"last_charging_at": "DATETIME", "repaired_at": "DATETIME"},
+}
 
 
 def ensure_columns(eng) -> None:

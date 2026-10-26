@@ -1,4 +1,4 @@
-"""요청·응답 JSON (명세 §5.2). 필드 이름은 앱과 같은 camelCase."""
+"""요청·응답 JSON (기획 §10). 필드 이름은 앱과 같은 camelCase."""
 from datetime import datetime
 from typing import Literal
 
@@ -124,3 +124,32 @@ class AlongRouteOut(CamelModel):
 class ReviewIn(CamelModel):
     station_id: str
     tags: list[ReviewTag] = Field(min_length=1, max_length=6)
+
+
+class AlertOut(CamelModel):
+    """운영사 고장 알림 한 건(기획 §6). 기기 정보 없음."""
+    alert_id: int
+    station_id: str
+    station_name: str
+    address: str
+    operator: str
+    charger_id: str | None          # 번호 모르는 실패면 None(충전소 단위)
+    public_state: str | None
+    status: Literal["OPEN", "IN_REPAIR", "RESOLVED"]
+    opened_at: datetime
+    last_fail_at: datetime | None
+    fail_devices: int               # 실패를 알린 서로 다른 차 수
+    reasons: dict[str, int]
+    acked_at: datetime | None
+    in_repair_at: datetime | None
+    resolved_at: datetime | None
+    resolution: Literal["USER_SUCCESS", "PUBLIC_CHARGING", "OPERATOR_STATUS", "EXPIRED"] | None
+    minutes_to_resolve: int | None
+
+
+class OperatorSummaryOut(CamelModel):
+    operator: str
+    open: int
+    in_repair: int
+    resolved: int                    # 최근 days일 동안 해결
+    median_minutes_to_resolve: int | None  # 기간 만료로 사라진 건 제외

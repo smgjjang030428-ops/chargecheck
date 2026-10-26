@@ -33,6 +33,12 @@ enum class ReasonCode {
     PUBLIC_OUT_OF_SERVICE,
     PUBLIC_SAYS_OK_BUT_FAILS,
     NO_RECENT_DATA,
+    /** 공공 데이터에서 다른 차가 충전 중이었음(우리 앱을 안 쓰는 차의 실제 충전). */
+    PUBLIC_CHARGING,
+    /** 실패 제보가 6시간 넘게 지남. 그 뒤 확인 기록 없음. */
+    OLD_FAILS,
+    /** 운영사 상태가 '점검 → 사용 가능'으로 바뀜. 수리됐을 수 있음. */
+    REPAIRED_UNCONFIRMED,
 }
 
 enum class ReviewTag { CABLE_SHORT, SPACE_NARROW, HAS_ROOF, SLOW_SPEED, PAYMENT_ISSUE, BLOCKED_BY_CAR }

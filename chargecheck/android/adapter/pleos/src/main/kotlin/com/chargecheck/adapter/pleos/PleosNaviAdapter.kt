@@ -32,7 +32,7 @@ private const val TAG = "ChargeCheck/Pleos"
 private const val POLL_MS = 10_000L
 
 /**
- * Pleos NaviHelper로 기본 내비의 목적지·경유지·도착·현재 위치를 받고, 목적지·경유지를 넘긴다. (§4.14)
+ * Pleos NaviHelper로 기본 내비의 목적지·경유지·도착·현재 위치를 받고, 목적지·경유지를 넘긴다. (기획 §3)
  * 위치도 내비에서 받으므로 LocationPort를 함께 구현한다(FusedLocation SDK는 아직 Coming Soon).
  */
 class PleosNaviAdapter(context: Context) : NaviPort, LocationPort {

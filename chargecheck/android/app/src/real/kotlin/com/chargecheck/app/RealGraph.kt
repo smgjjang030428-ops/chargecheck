@@ -5,6 +5,7 @@ import android.content.pm.ApplicationInfo
 import com.chargecheck.adapter.android.CarUxRestrictionsAdapter
 import com.chargecheck.adapter.pleos.PleosNaviAdapter
 import com.chargecheck.adapter.pleos.PleosVehicleAdapter
+import com.chargecheck.adapter.remote.KeyValueStore
 import com.chargecheck.adapter.remote.RemoteApiAdapter
 import com.chargecheck.core.config.ChargeCheckConfig
 import com.chargecheck.core.model.DeviceId
@@ -18,6 +19,8 @@ import com.chargecheck.core.port.ClockPort
 import com.chargecheck.core.port.RouteTarget
 import com.chargecheck.feature.session.ChargeSessionMachine
 import com.chargecheck.feature.session.SessionCoordinator
+import com.chargecheck.feature.session.SessionInput
+import com.chargecheck.feature.session.SessionState
 import com.chargecheck.feature.session.stationId
 import com.chargecheck.feature.warning.ArrivalWarningCoordinator
 import com.chargecheck.feature.warning.matchStation
@@ -28,7 +31,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
@@ -73,7 +78,20 @@ internal class RealGraph private constructor(context: Context) {
     val drivingState = CarUxRestrictionsAdapter(context)
     val navi = PleosNaviAdapter(context)
     private val prefs = context.getSharedPreferences("chargecheck", Context.MODE_PRIVATE)
-    val api = RemoteApiAdapter(DEV_SERVER, deviceId())
+    val settings = AppSettings(context)
+    val api = RemoteApiAdapter(DEV_SERVER, deviceId(), store = object : KeyValueStore {
+        override fun get(key: String): String? = prefs.getString(key, null)
+        override fun put(key: String, value: String?) = prefs.edit().putString(key, value).apply()
+    })
+
+    /** 서버 연결 상태. 끊기면 화면에 띄우고, 기록은 모아 두었다가 보낸다. */
+    val online: StateFlow<Boolean> = api.online
+
+    /** 아직 서버에 못 보낸 충전 기록 수. */
+    val pending = MutableStateFlow(api.pendingCount())
+
+    /** 앱 화면이 안 보일 때 짧게 알릴 문장(경유지 추가 등). [CardNotifier]가 알림으로 띄운다. */
+    val notices = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val packageName: String = context.packageName
 
     /** 서버에서 받은 주변 충전소와 판정. 지도·충전소 판별·글레오가 같이 쓴다. */
@@ -100,7 +118,7 @@ internal class RealGraph private constructor(context: Context) {
         ChargeCheckConfig.DEFAULT
     }
 
-    /** §4.8 StationResolver: POI ID → 100m 안 하나 → 이름이 겹치는 곳. 애매하면 null. */
+    /** 기획 §7 StationResolver: POI ID → 100m 안 하나 → 이름이 겹치는 곳. 애매하면 null. */
     val resolve: (RouteTarget) -> Station? = { target -> matchStation(target, stations.value.map { it.station }) }
 
     val session = SessionCoordinator(
@@ -113,7 +131,8 @@ internal class RealGraph private constructor(context: Context) {
         resolveStation = resolve,
         parked = drivingState.isParked(),
     )
-    val warning = ArrivalWarningCoordinator(navi, api, navi, resolve, log = session::note)
+    val warning = ArrivalWarningCoordinator(navi, api, navi, resolve, log = session::note, enabled = { settings.arrivalWarning })
+    private var notifier: CardNotifier? = null
 
     private val time = flow {
         while (true) {
@@ -129,6 +148,9 @@ internal class RealGraph private constructor(context: Context) {
     private var drivingCardShownFor: RoutePlan? = null
     private var parkedNow = true
 
+    /** 디버그 빌드 전용: 남은 주행 8km·배터리 8%로 흉내(에뮬레이터에서 Virtual Console 없이 카드 확인). */
+    var devLowBattery = false
+
     /** 경로 카드에 '괜찮아요'를 연속으로 누른 횟수. 2번이면 정말 못 갈 때만 띄운다. */
     private var dismissStreak: Int
         get() = prefs.getInt("route_dismiss_streak", 0)
@@ -140,6 +162,11 @@ internal class RealGraph private constructor(context: Context) {
         scope.launch {
             while (true) {
                 refreshStations()
+                if (api.pendingCount() > 0) {
+                    val sent = api.flushOutbox()
+                    if (sent > 0) session.note("모아 둔 기록 ${sent}건 전송")
+                }
+                pending.value = api.pendingCount()
                 delay(30_000)
             }
         }
@@ -153,6 +180,12 @@ internal class RealGraph private constructor(context: Context) {
         }
     }
 
+    /** 백그라운드 서비스가 켜질 때 한 번: 앱 화면이 안 보이면 카드를 알림으로 띄운다. */
+    fun startNotifier(context: Context) {
+        if (notifier != null) return
+        notifier = CardNotifier(context.applicationContext, this).also { it.start() }
+    }
+
     /** 차 주변 5km(검색한 지역이 있으면 그곳 3km), 없으면 기본 지역의 충전소와 판정을 서버에서 받아온다. */
     suspend fun refreshStations() {
         val focus = focusArea
@@ -164,6 +197,20 @@ internal class RealGraph private constructor(context: Context) {
         val near = car?.let { api.nearbyWithStatus(it, 5_000).getOrNull() }.orEmpty()
         val list = near.ifEmpty { api.nearbyWithStatus(DEFAULT_AREA, 5_000).getOrNull().orEmpty() }
         if (list.isNotEmpty() || stations.value.isEmpty()) stations.value = list
+        recheckDestination()
+    }
+
+    /** 충전소로 못 알아본 내비 목적지. 시동 직후엔 차 주변 충전소 목록보다 목적지가 먼저 와서 생긴다. */
+    private var unresolvedDestination: RouteTarget? = null
+
+    /** 충전소 목록이 바뀌면, 아까 못 알아본 목적지가 이제 충전소로 보이는지 다시 본다. */
+    private suspend fun recheckDestination() {
+        val dest = unresolvedDestination ?: return
+        val station = resolve(dest) ?: return
+        unresolvedDestination = null
+        session.note("목적지 다시 확인: ${dest.name} = 충전소")
+        closeRoute()
+        if (session.state.value is SessionState.Idle) session.dispatch(SessionInput.RouteTargetIsStation(station))
     }
 
     /** 충전소·지역 찾기(우리 DB). 충전소가 안 나오면 일반 목적지로 보고 [내비에서 찾기]를 권한다. */
@@ -199,7 +246,8 @@ internal class RealGraph private constructor(context: Context) {
         val key = "${dest.name}@${(dest.location.lat * 1e4).roundToInt()},${(dest.location.lon * 1e4).roundToInt()}"
         if (key == lastDestinationKey) return
         lastDestinationKey = key
-        if (resolve(dest) != null) {
+        unresolvedDestination = dest.takeIf { resolve(it) == null }
+        if (resolve(dest) != null || !settings.routeCards) {
             closeRoute()
             return
         }
@@ -227,8 +275,8 @@ internal class RealGraph private constructor(context: Context) {
     /** 목적지까지 가는 길의 충전소. 차의 현재 위치·남은 주행 가능 거리·배터리·내비 남은 거리를 함께 보낸다. */
     suspend fun planRoute(to: Place, remainM: Int? = null): Result<RoutePlan> {
         val from = navi.lastKnown() ?: DEFAULT_AREA
-        val range = vehicle.remainingRangeKm()
-        val soc = vehicle.currentSoc()
+        val range = if (devLowBattery) 8.0 else vehicle.remainingRangeKm()
+        val soc = if (devLowBattery) 8 else vehicle.currentSoc()
         session.note("가는 길 충전소 확인: ${to.name} · 남은 주행 ${range?.let { "%.0fkm".format(it) } ?: "모름"} · 배터리 ${soc ?: "모름"}%")
         return api.alongRoute(from, to, range, soc, remainM?.let { it / 1000.0 })
     }
@@ -240,8 +288,16 @@ internal class RealGraph private constructor(context: Context) {
         if (ok) {
             dismissStreak = 0
             closeRoute()
+            notices.tryEmit("경유지에 ${station.name} 추가 · 내비가 새 경로로 안내해요")
         }
         return ok
+    }
+
+    /** 알림 카드·주행 카드의 [들렀다 가기]: 추천 충전소를 경유지로. */
+    suspend fun addRecommendedStop(): Boolean {
+        val p = plan.value ?: return false
+        val rec = p.candidates.firstOrNull { it.stop.station.id == p.recommendedId } ?: return false
+        return addStop(rec.stop.station)
     }
 
     /** [괜찮아요]. 두 번 연속이면 다음부터 덜 띄운다. */
@@ -284,7 +340,7 @@ internal class RealGraph private constructor(context: Context) {
     suspend fun currentDestination(): RouteTarget? = navi.destination().first()
 
     private fun deviceId(): DeviceId {
-        // 설치마다 한 번 만드는 임의 UUID. 서버에는 해시로만 저장된다(명세 §5.3).
+        // 설치마다 한 번 만드는 임의 UUID. 서버에는 해시로만 저장된다(기획 §11).
         val id = prefs.getString("device_id", null) ?: UUID.randomUUID().toString().also { prefs.edit().putString("device_id", it).apply() }
         return DeviceId(id)
     }

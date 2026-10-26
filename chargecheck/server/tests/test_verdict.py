@@ -1,4 +1,4 @@
-"""compute_verdict 규칙 테스트 (명세 §5.4). 규칙 번호는 명세의 충전기 1~7, 충전소 a~g."""
+"""compute_verdict 규칙 테스트 (기획 §6). 규칙 이름의 번호(충전기 1~7, 충전소 a~g)는 이전 명세의 번호다."""
 from datetime import datetime, timedelta, timezone
 
 from app.services.verdict import ChargerIn, EventIn, compute_verdict
@@ -121,3 +121,38 @@ def test_결제_실패는_실패로_세고_문구로_구분():
     v = compute_verdict(chargers("2"), [EventIn("a", "FAIL", ago(10), "01", "PAYMENT")], NOW)
     assert v.verdict == "YELLOW"
     assert v.message.endswith("결제 실패 제보 포함")
+
+
+# --- 사용자가 다시 시도하지 않아도 빨강이 풀리는 신호 (기획 §6 고장 신고 루프) ---
+
+def test_마지막_실패가_6시간_넘으면_빨강_대신_노랑():
+    v = compute_verdict(chargers("2", "2"), [fail("a", 7 * 60, "01"), fail("b", 7 * 60, "01"), fail("c", 7 * 60, "02"), fail("d", 7 * 60, "02")], NOW)
+    assert (v.verdict, v.reason_code) == ("YELLOW", "OLD_FAILS")
+    assert v.message.startswith("7시간 전 실패 제보")
+
+
+def test_공공_데이터에서_충전_중으로_바뀌면_실패를_지운다():
+    cs = [ChargerIn("01", "04", "3", last_charging_at=ago(10)), ChargerIn("02", "04", "2")]
+    v = compute_verdict(cs, [fail("a", 60, "01"), fail("b", 50, "01")], NOW)
+    assert (v.verdict, v.reason_code) == ("GREEN", "PUBLIC_CHARGING")
+    assert "다른 차가 충전함" in v.message
+    assert v.chargers[0].cleared_by == "PUBLIC_CHARGING"
+
+
+def test_운영사_상태가_점검에서_사용가능으로_바뀌면_수리됐을_수_있음():
+    cs = [ChargerIn("01", "04", "2", repaired_at=ago(10))]
+    v = compute_verdict(cs, [fail("a", 60, "01"), fail("b", 50, "01")], NOW)
+    assert (v.verdict, v.reason_code) == ("YELLOW", "REPAIRED_UNCONFIRMED")
+    assert v.chargers[0].cleared_by == "OPERATOR_STATUS"
+
+
+def test_수리_신호_뒤에_또_실패하면_다시_센다():
+    cs = [ChargerIn("01", "04", "2", repaired_at=ago(30))]
+    v = compute_verdict(cs, [fail("a", 60, "01"), fail("b", 20, "01"), fail("c", 10, "01")], NOW)
+    assert (v.chargers[0].verdict, v.chargers[0].recent_fail_count) == ("RED", 2)
+
+
+def test_하루_넘게_멈춰_있는_충전_중_표시는_믿지_않는다():
+    cs = [ChargerIn("01", "04", "3", last_charging_at=ago(30 * 60))]
+    v = compute_verdict(cs, [fail("a", 60, "01"), fail("b", 50, "01")], NOW)
+    assert v.chargers[0].verdict == "RED"

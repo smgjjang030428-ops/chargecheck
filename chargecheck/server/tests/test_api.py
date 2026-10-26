@@ -1,4 +1,4 @@
-"""REST API 테스트 (명세 §5.2). 앱이 보내는 JSON 그대로 사용한다."""
+"""REST API 테스트 (기획 §10). 앱이 보내는 JSON 그대로 사용한다."""
 import uuid
 from datetime import datetime, timedelta, timezone
 

@@ -55,12 +55,6 @@ interface LocationPort {
 
 enum class VoiceIntent { YES, WAIT, NO, SWITCH, KEEP }
 
-interface VoicePort {
-    suspend fun say(text: String)
-    /** 인식 결과를 의도로 분류한다. 타임아웃·오류는 null(= 무응답). */
-    suspend fun ask(question: String, timeoutSec: Int): VoiceIntent?
-}
-
 interface ChargeCheckApiPort {
     suspend fun postEvent(event: ChargeEvent): Result<Unit>
     /** 이미 올린 실패 기록에 운전자가 고른 충전기 번호를 붙인다. PATCH /v1/events/{eventId} */

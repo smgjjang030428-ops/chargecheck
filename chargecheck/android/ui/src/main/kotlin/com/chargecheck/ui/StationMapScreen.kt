@@ -113,6 +113,9 @@ fun StationMapScreen(
     onNaviSearch: (String) -> Unit = {},
     /** 디버그 빌드 전용 버튼(글레오 흉내 등). */
     devExtra: List<Pair<String, () -> Unit>> = emptyList(),
+    /** 서버 연결이 끊겼을 때 등 한 줄 안내. */
+    banner: String? = null,
+    onSettings: (() -> Unit)? = null,
 ) {
     if (!parked) {
         DrivingScreen(state, warning, onWarningChoice, confirm, onConfirm, routeCard, onRouteCard)
@@ -131,6 +134,19 @@ fun StationMapScreen(
                 SearchBox(Modifier.align(Alignment.TopStart).padding(16.dp), search, onQueryChange, onSearch, onPickPlace, onNaviSearch)
             }
             Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(20.dp)) {
+                if (banner != null || onSettings != null) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text(
+                            banner ?: "",
+                            color = TextMain,
+                            fontSize = 18.sp,
+                            modifier = Modifier.weight(1f).then(
+                                if (banner != null) Modifier.clip(RoundedCornerShape(12.dp)).background(Yellow.copy(alpha = 0.25f)).padding(12.dp) else Modifier,
+                            ),
+                        )
+                        onSettings?.let { OutlinedButton(onClick = it, shape = RoundedCornerShape(12.dp)) { Text("설정", color = TextMain, fontSize = 20.sp) } }
+                    }
+                }
                 if (plan != null) {
                     RoutePanel(Modifier.weight(2f).fillMaxWidth(), plan, { onSelect(it) }, onRouteGo, onRouteClose)
                     SessionPanel(Modifier.weight(1f).fillMaxWidth(), state, engineOn = true, toast = toast, uploads = uploads)
@@ -187,7 +203,7 @@ private fun StationMap(stations: List<MapStation>, car: GeoPoint?, onSelect: (St
                 }
                 view.overlays += Marker(view).apply {
                     position = OsmPoint(p.destination.location.lat, p.destination.location.lon)
-                    icon = dot(android.graphics.Color.WHITE, 34)
+                    icon = dot(view, android.graphics.Color.WHITE, MARKER_DP)
                     setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                     title = p.destination.name
                 }
@@ -195,7 +211,7 @@ private fun StationMap(stations: List<MapStation>, car: GeoPoint?, onSelect: (St
             stations.forEach { s ->
                 view.overlays += Marker(view).apply {
                     position = OsmPoint(s.location.lat, s.location.lon)
-                    icon = dot(s.verdict.color().toArgb(), if (s.highlight) 48 else 30)
+                    icon = dot(view, s.verdict.color().toArgb(), if (s.highlight) 48 else MARKER_DP)
                     setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                     title = s.name
                     setOnMarkerClickListener { _, _ -> onSelect(s.id); true }
@@ -204,7 +220,7 @@ private fun StationMap(stations: List<MapStation>, car: GeoPoint?, onSelect: (St
             car?.let {
                 view.overlays += Marker(view).apply {
                     position = OsmPoint(it.lat, it.lon)
-                    icon = dot(android.graphics.Color.rgb(40, 110, 230), 34)
+                    icon = dot(view, android.graphics.Color.rgb(40, 110, 230), MARKER_DP)
                     setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
                     title = "내 차"
                 }
@@ -236,11 +252,16 @@ private fun StationMap(stations: List<MapStation>, car: GeoPoint?, onSelect: (St
     )
 }
 
-private fun dot(color: Int, sizePx: Int) = GradientDrawable().apply {
+/** 지도 표시는 36dp 이상(안드로이드 차량용 가이드, 기획 §9). */
+private const val MARKER_DP = 36
+
+private fun dot(view: android.view.View, color: Int, sizeDp: Int) = GradientDrawable().apply {
+    val density = view.resources.displayMetrics.density
+    val px = (sizeDp * density).toInt()
     shape = GradientDrawable.OVAL
     setColor(color)
-    setStroke(5, android.graphics.Color.WHITE)
-    setSize(sizePx, sizePx)
+    setStroke((3 * density).toInt(), android.graphics.Color.WHITE)
+    setSize(px, px)
 }
 
 @Composable

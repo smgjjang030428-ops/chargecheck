@@ -1,4 +1,4 @@
-"""ChargeCheck 서버 (명세 §5). 실행: uvicorn app.main:app --reload --host 0.0.0.0 --port 8000"""
+"""ChargeCheck 서버 (기획 §10). 실행: uvicorn app.main:app --reload --host 0.0.0.0 --port 8000"""
 import asyncio
 import logging
 from contextlib import asynccontextmanager
@@ -11,7 +11,8 @@ from app.config import settings
 from app.db import Base, SessionLocal, engine, ensure_columns
 from app.jobs.public_sync import sync_info, sync_status
 from app.models import Station
-from app.routers import events, places, reviews, stations
+from app.routers import events, operators, places, reviews, stations
+from app.services import alerts
 
 log = logging.getLogger("chargecheck")
 
@@ -37,6 +38,17 @@ async def _sync_loop() -> None:
         await asyncio.sleep(settings.STATUS_SYNC_MINUTES * 60)
 
 
+async def _alert_loop() -> None:
+    """열린 운영사 알림을 주기적으로 다시 본다: 공공 상태 복구·충전 중·기간 만료로 자동 해제(기획 §6)."""
+    while True:
+        await asyncio.sleep(settings.STATUS_SYNC_MINUTES * 60)
+        try:
+            with SessionLocal() as session:
+                await asyncio.to_thread(alerts.refresh_open, session)
+        except Exception:
+            log.exception("운영사 알림 갱신 실패")
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     Base.metadata.create_all(engine)
@@ -46,7 +58,9 @@ async def lifespan(_: FastAPI):
         task = asyncio.create_task(_sync_loop())
     else:
         log.info("공공 데이터 동기화 꺼짐(PUBLIC_API_KEY 없음 또는 SYNC_ENABLED=false)")
+    alert_task = asyncio.create_task(_alert_loop())
     yield
+    alert_task.cancel()
     if task:
         task.cancel()
 
@@ -56,6 +70,7 @@ app.include_router(events.router)
 app.include_router(stations.router)
 app.include_router(reviews.router)
 app.include_router(places.router)
+app.include_router(operators.router)
 
 
 @app.get("/healthz")

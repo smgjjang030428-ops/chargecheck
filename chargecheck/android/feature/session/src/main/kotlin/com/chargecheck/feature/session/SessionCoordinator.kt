@@ -6,6 +6,7 @@ import com.chargecheck.core.model.ChargerStatus
 import com.chargecheck.core.model.FailReason
 import com.chargecheck.core.model.GeoPoint
 import com.chargecheck.core.model.Station
+import com.chargecheck.core.model.SocSample
 import com.chargecheck.core.model.StationId
 import com.chargecheck.core.model.distanceMetersTo
 import com.chargecheck.core.port.ChargeCheckApiPort
@@ -52,9 +53,9 @@ data class FailConfirm(
 
 /**
  * 포트의 Flow를 [SessionInput]으로 바꿔 [ChargeSessionMachine.reduce]에 넣고, 나온 [Effect]를 실행한다.
- * 상태는 [state]로 UI에 노출한다. (기획문서/앱구조_명세서_AI용.md §4.7 끝)
+ * 상태는 [state]로 UI에 노출한다. (기획문서/차지체크_앱_구동_기획.md §5 끝)
  *
- * @param resolveStation 내비 목적지가 충전소인지 판별한다. §4.8 StationResolver가 생기기 전까지의 자리.
+ * @param resolveStation 내비 목적지가 충전소인지 판별한다. 기획 §7 StationResolver가 생기기 전까지의 자리.
  * @param parked 주차(true)·주행(false). 주차→주행이면 [SessionInput.Departing]을 넣고, 못 받은 실패 확인을 다음 주차 때 다시 띄운다.
  */
 class SessionCoordinator(
@@ -87,6 +88,10 @@ class SessionCoordinator(
     /** 잔량 변화 없이 떠난 충전소의 실패 확인. 답하거나 시간이 지나면 null. */
     private val _confirm = MutableStateFlow<FailConfirm?>(null)
     val confirm: StateFlow<FailConfirm?> = _confirm.asStateFlow()
+
+    /** 이번 실행에서 서버가 받은 기록(화면의 '서버로 보낸 기록 n건'). */
+    private val _uploaded = MutableStateFlow<List<ChargeEvent>>(emptyList())
+    val uploaded: StateFlow<List<ChargeEvent>> = _uploaded.asStateFlow()
 
     private val cfg get() = machine.cfg
 
@@ -244,15 +249,20 @@ class SessionCoordinator(
     fun note(text: String) = log(text)
 
     suspend fun dispatch(input: SessionInput) {
+        var arrived = false
         val effects = mutex.withLock {
             val before = _state.value
             val t = machine.reduce(before, input)
             _state.value = t.state
             if (t.state::class != before::class) log("상태: ${before.label()} → ${t.state.label()}")
             if (t.state !is SessionState.Asking && t.state !is SessionState.AskingRetro) _question.value = null
+            arrived = t.state is SessionState.Candidate && before !is SessionState.Candidate
             t.effects
         }
         effects.forEach { run(it) }
+        // 잔량 신호는 값이 바뀔 때만 온다. 꽂아도 충전이 안 되면(잔량 그대로) 도착 뒤 신호가 하나도 없어
+        // 판정이 시작되지 않으므로, 도착하는 순간 지금 잔량을 한 번 직접 읽어 넣는다.
+        if (arrived) vehicle.currentSoc()?.let { dispatch(SessionInput.Soc(SocSample(it, clock.now()))) }
     }
 
     private suspend fun run(effect: Effect) {
@@ -275,8 +285,11 @@ class SessionCoordinator(
             // 정상 기록 뒤 successSent 표시만 바꾸는 저장은 기록하지 않는다
             is Effect.SaveSnapshot -> if (!effect.snap.successSent) log("도착 스냅샷 저장 (SOC ${effect.snap.soc}%)")
             Effect.ClearSnapshot -> Unit
-            Effect.NotifyComplete -> log("알림: 목표 충전량에 도달했어요")
-            is Effect.OfferReview -> log("충전소를 떠남 → 평가 요청")
+            Effect.NotifyComplete -> {
+                _toast.value = "목표 충전량에 도달했어요"
+                log("알림: 목표 충전량에 도달했어요")
+            }
+            is Effect.OfferReview -> log("충전소를 떠남")
         }
     }
 
@@ -289,10 +302,12 @@ class SessionCoordinator(
             else -> " — 실패, 재시도 대기"
         }
         log("서버 기록: ${e.result} (${e.mode}, SOC ${e.socStart}→${e.socEnd}%)$note")
+        if (r.isSuccess) _uploaded.update { it + e }
         if (r.isSuccess && e.result == ChargeResult.FAIL) {
             lastFail = e
-            // 번호를 이미 말했으면 다시 묻지 않는다
-            if (e.chargerId == null) offerChargerPick(e.eventId, e.stationId, stationName)
+            // 번호를 이미 말했으면 다시 묻지 않는다. 번호 질문이 뜨면 그 질문이 '기록했어요'를 겸한다(알림을 하나로)
+            val asked = e.chargerId == null && offerChargerPick(e.eventId, e.stationId, stationName)
+            if (!asked) _toast.value = "${stationName}: 충전 실패를 기록했어요 · 다음 차에게 알려 줄게요"
         }
         return r.isSuccess
     }
@@ -332,11 +347,12 @@ class SessionCoordinator(
     }
 
     /** 충전기가 2대 이상인 충전소에서만 묻는다(1대면 물을 필요가 없다). 조회 실패는 조용히 넘어간다. */
-    private suspend fun offerChargerPick(eventId: String, stationId: StationId, name: String) {
-        val status = runCatching { api.stationStatus(stationId).getOrNull() }.getOrNull() ?: return
-        if (status.chargers.size < 2) return
+    private suspend fun offerChargerPick(eventId: String, stationId: StationId, name: String): Boolean {
+        val status = runCatching { api.stationStatus(stationId).getOrNull() }.getOrNull() ?: return false
+        if (status.chargers.size < 2) return false
         _chargerPick.value = ChargerPick(eventId, name, status.chargers)
         log("질문: 몇 번 충전기였나요?")
+        return true
     }
 
     private fun log(text: String) = _log.update { it + LogEntry(clock.now(), text) }

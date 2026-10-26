@@ -16,14 +16,17 @@ class Settings(BaseSettings):
     DEVICE_SALT: str = "dev-salt-change-me"
     SYNC_ENABLED: bool = True
     STATUS_SYNC_MINUTES: int = 5
+    # 운영사 고장 알림을 받을 주소(선택). 새 고장 의심이 생기면 JSON을 POST한다. 비우면 보내지 않는다.
+    OPERATOR_WEBHOOK_URL: str = ""
 
 
 settings = Settings()
 
-# 판정 기준(명세 §5.4). 앱의 ChargeCheckConfig와 같은 값.
+# 판정 기준(기획 §6). 앱의 ChargeCheckConfig와 같은 값.
 BLOCKED_NOTICE_MIN = 60  # 일반차 주차 막힘 제보를 보여주는 시간(분)
 GREEN_WINDOW_H = 3
 LOOKBACK_H = 24
+OLD_FAIL_H = 6   # 마지막 실패가 이만큼 지나면 빨강 대신 노랑("n시간 전 실패 제보")
 DEDUP_WINDOW_H = 2
 MAX_FAILS_PER_DEVICE_PER_DAY = 10
 

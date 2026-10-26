@@ -28,7 +28,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import java.time.Instant
 
-// 시연·테스트용 가짜 포트. ScenarioPlayer가 값을 흘려보낸다. (기획문서/앱구조_명세서_AI용.md §4.14, §4.15)
+// 시연·테스트용 가짜 포트. ScenarioPlayer가 값을 흘려보낸다. (기획문서/차지체크_앱_구동_기획.md §3, §3)
 
 /** 배속으로 흐르는 시계. */
 class FakeClock(start: Instant) : ClockPort {

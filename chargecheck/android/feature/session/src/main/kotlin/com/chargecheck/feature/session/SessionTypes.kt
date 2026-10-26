@@ -10,7 +10,7 @@ import com.chargecheck.core.model.StationId
 import com.chargecheck.core.port.VoiceIntent
 import java.time.Instant
 
-/** 충전 세션의 상태. 기획문서/앱구조_명세서_AI용.md §4.7 상태도와 1:1로 대응한다. */
+/** 충전 세션의 상태. 기획문서/차지체크_앱_구동_기획.md §5 상태도와 1:1로 대응한다. */
 sealed interface SessionState {
     data object Idle : SessionState
 
