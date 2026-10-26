@@ -9,6 +9,7 @@ import ai.pleos.playground.navi.data.DestinationInfo
 import ai.pleos.playground.navi.data.NavigationScreenRequest
 import ai.pleos.playground.navi.data.RequestWaypointInfo
 import ai.pleos.playground.navi.data.RouteInfo
+import ai.pleos.playground.navi.data.RouteWithWaypointsRequest
 import ai.pleos.playground.navi.data.WaypointArrivedInfo
 import ai.pleos.playground.navi.data.WaypointInfo
 import ai.pleos.playground.navi.helper.NaviHelper
@@ -135,6 +136,28 @@ class PleosNaviAdapter(context: Context) : NaviPort, LocationPort {
     override suspend fun addWaypoint(target: RouteTarget): Result<Unit> = runCatching {
         navi.addWaypoint(
             RequestWaypointInfo(target.location.lat, target.location.lon, target.name, WaypointIndex.FIRST, target.poiId ?: "", "", "", ""),
+        )
+    }
+
+    /**
+     * 경유지 교체. removeWaypoint 뒤 바로 addWaypoint를 보내면 내비가 두 요청을 동시에 처리하다 경로를 다시 짜면서
+     * 더한 경유지를 버린다(에뮬레이터 로그 2026-10-26: 교체 뒤 wayPoints=[]). 그래서 목적지와 바뀐 경유지 목록을
+     * requestRouteWithWaypoints 한 번으로 보낸다. 좌표가 없는(0,0) 다른 경유지는 다시 넣을 수 없어 뺀다. 경유지는 최대 2개.
+     */
+    override suspend fun replaceWaypoint(index: Int, target: RouteTarget): Result<Unit> = runCatching {
+        val dest = checkNotNull(destination) { "목적지가 없음" }
+        val list = waypoints.toMutableList().apply { if (index in indices) set(index, target) else add(target) }
+            .filter { it === target || it.location.lat != 0.0 || it.location.lon != 0.0 }
+            .take(2)
+        val requests = list.mapIndexed { i, w ->
+            RequestWaypointInfo(w.location.lat, w.location.lon, w.name, if (i == 0) WaypointIndex.FIRST else WaypointIndex.SECOND, w.poiId ?: "", "", "", "")
+        }
+        Log.d(TAG, "경유지 교체 요청: ${list.joinToString { it.name }} → ${dest.name}")
+        navi.requestRouteWithWaypoints(
+            RouteWithWaypointsRequest(
+                RouteInfo(dest.location.lat, dest.location.lon, null, null, dest.name, dest.poiId ?: "", "", "", RouteOption.RECOMMENDED, "", false),
+                requests,
+            ),
         )
     }
 

@@ -9,6 +9,7 @@ import com.chargecheck.core.model.Station
 import com.chargecheck.core.model.StationId
 import com.chargecheck.core.model.StationStatus
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.map
 import java.time.Instant
 
@@ -24,6 +25,8 @@ interface VehiclePort {
     suspend fun chargeTargetPct(): Int?
     /** 남은 주행 가능 거리(km). 모르면 null. Pleos: Odometer.getRangeRemainingDistance (권한 CAR_DRIVE) */
     suspend fun remainingRangeKm(): Double? = null
+    /** 충전구가 열렸는지(true)·닫혔는지(false). 신호가 없는 차면 아무것도 흘리지 않는다. Pleos: EvBattery.registerEvChargePortOpen */
+    fun chargePortOpen(): Flow<Boolean> = emptyFlow()
 }
 
 interface DrivingStatePort {
@@ -40,6 +43,8 @@ interface NaviPort {
     /** 목적지·경유지 도착. */
     fun arrivals(): Flow<RouteTarget>
     suspend fun addWaypoint(target: RouteTarget): Result<Unit>
+    /** [index]번째 경유지(0부터)를 [target]으로 바꾼다. 지원하지 않으면 경유지로 더한다. Pleos: removeWaypoint + addWaypoint */
+    suspend fun replaceWaypoint(index: Int, target: RouteTarget): Result<Unit> = addWaypoint(target)
     /** 기본 내비에 목적지를 넘겨 길안내를 시작한다(지도 화면의 [여기로 안내]). Pleos: NaviHelper.requestRoute */
     suspend fun setDestination(target: RouteTarget): Result<Unit>
     /** 지금 목적지(경유지 제외). 없으면 null. 기본 구현은 routeTargets의 마지막(목적지가 맨 뒤). */

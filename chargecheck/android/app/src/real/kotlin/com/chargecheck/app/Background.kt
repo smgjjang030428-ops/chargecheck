@@ -95,6 +95,7 @@ class BootReceiver : BroadcastReceiver() {
 
 internal const val CHANNEL_SERVICE = "service"
 internal const val CHANNEL_CARDS = "cards"
+internal const val CHANNEL_NOTICES = "notices"
 internal const val ID_SERVICE = 1
 
 internal fun createChannels(context: Context) {
@@ -102,6 +103,13 @@ internal fun createChannels(context: Context) {
     nm.createNotificationChannel(NotificationChannel(CHANNEL_SERVICE, "백그라운드 기록", NotificationManager.IMPORTANCE_MIN))
     // 내비 화면 위에 잠깐 뜨는 카드(헤드업). 소리는 한 번만 짧게.
     nm.createNotificationChannel(NotificationChannel(CHANNEL_CARDS, "주행 카드", NotificationManager.IMPORTANCE_HIGH))
+    // 결과 안내는 보기만 하면 되므로 소리 없이 잠깐(헤드업은 HIGH여야 뜬다)
+    nm.createNotificationChannel(
+        NotificationChannel(CHANNEL_NOTICES, "결과 안내", NotificationManager.IMPORTANCE_HIGH).apply {
+            setSound(null, null)
+            enableVibration(false)
+        },
+    )
 }
 
 internal fun openAppIntent(context: Context): PendingIntent = PendingIntent.getActivity(

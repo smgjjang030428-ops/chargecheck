@@ -198,6 +198,7 @@ private fun RealContent(settings: AppSettings, onWithdraw: () -> Unit) {
             },
             devExtra = if (graph.devTools) {
                 // 운전자가 내비에 일반 목적지를 넣은 상황을 재현(에뮬레이터 내비는 자체 검색이 안 될 수 있음)
+                listOf("내비가 충전소 경유" to { scope.launch { graph.devNaviPicksStation() }; Unit }) +
                 listOf("배터리 8%" to { graph.devLowBattery = !graph.devLowBattery; graph.session.note("개발용: 배터리 8% 흉내 ${if (graph.devLowBattery) "켬" else "끔"}") }) +
                 listOf("목적지 바꾸기" to { scope.launch { graph.navi.setDestination(DEV_DESTINATIONS[devDestination++ % DEV_DESTINATIONS.size]) }; Unit }) +
                     gleoMocks(context)
@@ -235,7 +236,7 @@ private fun NearbyStation.toMap(highlight: Boolean = false): MapStation {
 }
 
 /** 주행 중 15초 카드: "가는 길에 충전이 필요해요" + 추천 충전소 한 줄. */
-internal fun RoutePlan.toCard(): RouteCardUi {
+private fun RoutePlan.toCard(): RouteCardUi {
     val rec = candidates.firstOrNull { it.stop.station.id == recommendedId }
         ?: return RouteCardUi("충전 없이는 못 가요", "가는 길에 갈 수 있는 충전소가 없어요", canGo = false)
     val why = rec.stop.status.message.ifBlank { reasonText(rec.stop.status.reasonCode) }

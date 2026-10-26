@@ -23,14 +23,19 @@ data class ArrivalWarning(
     val status: StationStatus,
     /** 가까운 GREEN 충전소. 없으면 [그대로]만 보인다. */
     val alternative: Station?,
+    /** 대체 충전소의 판정("30분 전 충전됨" 같은 근거를 함께 보여 준다). */
+    val alternativeStatus: StationStatus? = null,
+    /** 경고한 충전소가 경유지면 그 순번(0부터). [바꾸기]를 고르면 그 경유지를 대안으로 교체한다. 목적지면 null. */
+    val waypointIndex: Int? = null,
 ) {
     /** 서버 문장이 있으면 그것을(대수가 들어 있음), 없으면 이유 코드 문장. */
     val reasonText: String get() = status.message.ifBlank { reasonText(status.reasonCode) }
 }
 
 /**
- * F3 도착 전 경고. 내비 목적지가 충전소로 바뀌면 판정을 조회하고, YELLOW·RED면 경고와 대체 충전소를 띄운다.
- * (기획문서/차지체크_앱_구동_기획.md §6)
+ * F3 도착 전 경고 = 내비가 고른 충전소 검증. 내비 경로(목적지·경유지)에 충전소가 들어오면 — 운전자가 넣었든 내비가
+ * 충전소를 자동 추천해 넣었든 — 판정을 조회하고, YELLOW·RED면 경고와 대체 충전소(실제 충전 근거와 함께)를 띄운다.
+ * 차지체크는 내비의 충전 추천과 경쟁하지 않고, 그 추천이 실제로 되는 곳인지 확인한다(기획 §7).
  *
  * - 목적지가 바뀔 때 1회만 경고한다. 같은 충전소로 반복 경고하지 않는다.
  * - GREEN·GRAY면 말하지 않는다.
@@ -54,13 +59,18 @@ class ArrivalWarningCoordinator(
     fun start(scope: CoroutineScope) {
         stop()
         job = scope.launch {
-            navi.routeTargets().collect { targets ->
-                val station = targets.firstNotNullOfOrNull(resolveStation) ?: return@collect
-                if (station.id == lastChecked || !enabled()) return@collect
-                lastChecked = station.id
-                check(station)
-            }
+            navi.routeTargets().collect { onTargets(it) }
         }
+    }
+
+    /** 경로의 첫 충전소를 검사한다. 앱이 충전소 목록을 새로 받아 못 알아보던 경유지를 알아보게 되면 다시 부른다. */
+    suspend fun onTargets(targets: List<RouteTarget>) {
+        val index = targets.indexOfFirst { resolveStation(it) != null }
+        if (index < 0) return
+        val station = resolveStation(targets[index]) ?: return
+        if (station.id == lastChecked || !enabled()) return
+        lastChecked = station.id
+        check(station, index.takeIf { it < targets.lastIndex })
     }
 
     fun stop() {
@@ -80,14 +90,21 @@ class ArrivalWarningCoordinator(
         _warning.value = null
         val alt = w.alternative
         if (intent == VoiceIntent.SWITCH && alt != null) {
-            navi.addWaypoint(RouteTarget(alt.name, alt.location, alt.id.value))
-            log("경유지 추가: ${alt.name}")
+            val target = RouteTarget(alt.name, alt.location, alt.id.value)
+            val index = w.waypointIndex
+            if (index != null) {
+                navi.replaceWaypoint(index, target)
+                log("경유지 교체: ${w.station.name} → ${alt.name}")
+            } else {
+                navi.addWaypoint(target)
+                log("경유지 추가: ${alt.name}")
+            }
         } else {
             log("경고 닫음: ${w.station.name}(으)로 그대로 감")
         }
     }
 
-    private suspend fun check(station: Station) {
+    private suspend fun check(station: Station, waypointIndex: Int? = null) {
         val status = api.stationStatus(station.id).getOrNull() ?: return
         if (!shouldWarn(status)) {
             _warning.value = null
@@ -97,8 +114,8 @@ class ArrivalWarningCoordinator(
         val here = location.lastKnown() ?: station.location
         // 초록(최근 정상) 우선, 없으면 경고 대상이 아닌 가장 가까운 곳
         val candidates = api.alternatives(station.id, here).getOrNull().orEmpty()
-        val alternative = (candidates.firstOrNull { it.second.verdict == Verdict.GREEN } ?: candidates.firstOrNull { !shouldWarn(it.second) })?.first
-        _warning.value = ArrivalWarning(station, status, alternative)
+        val alternative = candidates.firstOrNull { it.second.verdict == Verdict.GREEN } ?: candidates.firstOrNull { !shouldWarn(it.second) }
+        _warning.value = ArrivalWarning(station, status, alternative?.first, alternative?.second, waypointIndex)
         log("도착 전 경고: ${station.name} ${status.verdict} — ${status.message.ifBlank { reasonText(status.reasonCode) }}")
     }
 }

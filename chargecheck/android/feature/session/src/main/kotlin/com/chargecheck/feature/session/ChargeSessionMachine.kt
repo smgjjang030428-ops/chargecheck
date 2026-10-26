@@ -87,14 +87,14 @@ class ChargeSessionMachine(
 
     private fun onIdle(input: SessionInput): Transition = when (input) {
         is RouteTargetIsStation -> Transition(Approaching(input.station)) // T1
-        is StoppedNearStation -> startCandidate(input.station, input.at) // T2
+        is StoppedNearStation -> startCandidate(input.station, input.at, input.radiusM) // T2
         is Arrived -> startCandidate(input.station, input.at) // T2
         else -> stay(Idle)
     }
 
     private fun onApproaching(state: Approaching, input: SessionInput): Transition = when (input) {
         is RouteTargetIsStation -> Transition(Approaching(input.station))
-        is StoppedNearStation -> startCandidate(input.station, input.at) // T2
+        is StoppedNearStation -> startCandidate(input.station, input.at, input.radiusM) // T2
         is Arrived -> startCandidate(input.station, input.at) // T2
         else -> stay(state)
     }
@@ -110,7 +110,7 @@ class ChargeSessionMachine(
                 else -> startMonitoring(state.station, state.stoppedAt, soc, input.now) // T3
             }
         }
-        is Moved -> if (input.distanceFromStationM > cfg.onsiteRadiusM) Transition(Idle) else stay(state) // T4
+        is Moved -> if (input.distanceFromStationM > (state.radiusM ?: cfg.onsiteRadiusM)) Transition(Idle) else stay(state) // T4
         is Departing -> { // T23: 세션 시작(onsiteMinStop) 전에 출발. attemptMinStop 넘게 있었으면 꽂아 보고 떠났을 수 있다
             val soc = state.lastSoc
             if (soc != null && Duration.between(state.stoppedAt, input.at) >= cfg.attemptMinStop) {
@@ -258,8 +258,8 @@ class ChargeSessionMachine(
 
     // ---------------------------------------------------------------- 도우미
 
-    private fun startCandidate(station: Station, at: Instant) =
-        Transition(Candidate(station, at), listOf(Effect.ScheduleTick(at + cfg.onsiteMinStop)))
+    private fun startCandidate(station: Station, at: Instant, radiusM: Int? = null) =
+        Transition(Candidate(station, at, radiusM = radiusM), listOf(Effect.ScheduleTick(at + cfg.onsiteMinStop)))
 
     private fun snapshot(station: Station, arrivedAt: Instant, soc: SocSample) = ArrivalSnapshot(
         stationId = station.id,

@@ -22,6 +22,8 @@ sealed interface SessionState {
         val station: Station,
         val stoppedAt: Instant,
         val lastSoc: SocSample? = null,
+        /** 현장으로 보는 반경. null이면 onsiteRadiusM(내비 도착). 충전구로 시작하면 portRadiusM. */
+        val radiusM: Int? = null,
     ) : SessionState
 
     /** SOC를 실시간으로 지켜보는 중(LIVE). */
@@ -59,8 +61,8 @@ sealed interface SessionState {
 sealed interface SessionInput {
     data class RouteTargetIsStation(val station: Station) : SessionInput
 
-    /** 내비 없이 충전소 반경(onsiteRadiusM) 안에 정차. */
-    data class StoppedNearStation(val station: Station, val at: Instant) : SessionInput
+    /** 내비 없이 충전소 근처에 정차해 충전구를 열었다. [radiusM] 안이면 현장으로 본다. */
+    data class StoppedNearStation(val station: Station, val at: Instant, val radiusM: Int? = null) : SessionInput
 
     /** 내비 목적지·경유지 도착. */
     data class Arrived(val station: Station, val at: Instant) : SessionInput

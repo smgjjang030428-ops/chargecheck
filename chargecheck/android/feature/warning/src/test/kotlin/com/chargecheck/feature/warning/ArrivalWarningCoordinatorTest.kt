@@ -33,6 +33,7 @@ class ArrivalWarningCoordinatorTest {
 
     private val targets = MutableStateFlow<List<RouteTarget>>(emptyList())
     private val waypoints = mutableListOf<RouteTarget>()
+    private val replaced = mutableListOf<Pair<Int, String?>>()
     private var statusCalls = 0
 
     private fun Station.target() = RouteTarget(name, location, id.value)
@@ -41,6 +42,10 @@ class ArrivalWarningCoordinatorTest {
         navi = object : NaviPort {
             override fun routeTargets() = targets
             override fun arrivals() = emptyFlow<RouteTarget>()
+            override suspend fun replaceWaypoint(index: Int, target: RouteTarget): Result<Unit> {
+                replaced += index to target.poiId
+                return Result.success(Unit)
+            }
             override suspend fun addWaypoint(target: RouteTarget): Result<Unit> {
                 waypoints += target
                 targets.value = listOf(target) + targets.value
@@ -79,10 +84,23 @@ class ArrivalWarningCoordinatorTest {
         targets.value = listOf(red.target())
         val w = assertNotNull(coordinator.warning.value)
         assertEquals(green, w.alternative)
+        assertEquals(Verdict.GREEN, w.alternativeStatus?.verdict) // 대안에도 판정 근거를 붙인다
 
         coordinator.choose(VoiceIntent.SWITCH)
         assertNull(coordinator.warning.value)
         assertEquals(listOf(green.id.value), waypoints.map { it.poiId })
+    }
+
+    @Test
+    fun `내비가 경유지로 넣은 충전소도 검사한다(목적지가 충전소가 아니어도)`() = runTest(UnconfinedTestDispatcher()) {
+        coordinator.start(backgroundScope)
+        targets.value = listOf(red.target(), RouteTarget("수원역", GeoPoint(37.2664, 127.0001), null))
+        val w = assertNotNull(coordinator.warning.value)
+        assertEquals(red to 0, w.station to w.waypointIndex)
+        // [바꾸기]면 그 경유지를 대안으로 교체(더하지 않는다)
+        coordinator.choose(VoiceIntent.SWITCH)
+        assertEquals(listOf<Pair<Int, String?>>(0 to green.id.value), replaced)
+        assertEquals(emptyList<RouteTarget>(), waypoints)
     }
 
     @Test
@@ -109,6 +127,6 @@ class ArrivalWarningCoordinatorTest {
         targets.value = listOf(red.target())
         coordinator.choose(VoiceIntent.KEEP)
         assertNull(coordinator.warning.value)
-        assertEquals(emptyList(), waypoints)
+        assertEquals(emptyList<RouteTarget>(), waypoints)
     }
 }

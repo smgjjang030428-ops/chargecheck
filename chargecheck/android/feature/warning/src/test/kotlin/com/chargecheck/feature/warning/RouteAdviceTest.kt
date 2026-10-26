@@ -60,4 +60,22 @@ class RouteAdviceTest {
         assertEquals(dream, matchStation(RouteTarget("SW드림타운 충전소", here, "x"), listOf(dream, other)))
         assertNull(matchStation(RouteTarget("주차장 충전기", here, "x"), listOf(dream, other)))
     }
+
+    @Test
+    fun `이름이 비슷한 충전소가 붙어 있으면 이름이 정확히 같은 곳을 고른다`() {
+        val one = station("A", "경기성남 SW드림타운 1")
+        val two = station("B", "경기성남 SW드림타운 2", dLat = 0.0002)
+        val three = station("C", "경기성남 SW드림타운 3", dLat = 0.0004)
+        assertEquals(two, matchStation(RouteTarget("경기성남 SW드림타운 2", here, null), listOf(one, two, three)))
+        assertNull(matchStation(RouteTarget("SW드림타운 충전소", here, null), listOf(one, two, three)))
+    }
+
+    @Test
+    fun `좌표가 없는 경유지는 이름이 정확히 같은 곳으로`() {
+        val one = station("A", "경기성남 SW드림타운 1")
+        val two = station("B", "경기성남 SW드림타운 2", dLat = 0.0002)
+        val noWhere = com.chargecheck.core.model.GeoPoint(0.0, 0.0)
+        assertEquals(two, matchStation(RouteTarget("경기성남 SW드림타운 2", noWhere, null), listOf(one, two)))
+        assertNull(matchStation(RouteTarget("SW드림타운", noWhere, null), listOf(one, two)))
+    }
 }

@@ -24,12 +24,16 @@ private val GENERIC_WORDS = setOf("충전소", "충전기", "주차장", "급속
  * 내비 목적지·경유지를 우리 충전소와 짝짓는다(기획 §7).
  * 1. POI ID가 같으면 그 충전소.
  * 2. 아니면 [radiusM] 안 충전소. 하나면 그것.
- * 3. 여럿이면(한 건물에 운영사가 여럿 등) 이름이 겹치는 곳만. 그래도 애매하면 null — 엉뚱한 충전소로 경고하지 않는다.
+ * 3. 여럿이면(한 건물에 운영사가 여럿 등) 이름이 정확히 같은 곳, 없으면 이름이 겹치는 곳만.
+ *    그래도 애매하면 null — 엉뚱한 충전소로 경고하지 않는다. (예: "SW드림타운 1·2·3"이 붙어 있으면 이름 전체로 고른다)
  */
 fun matchStation(target: RouteTarget, known: List<Station>, radiusM: Double = 100.0): Station? {
     known.firstOrNull { it.id.value == target.poiId }?.let { return it }
+    // 좌표가 없는 경유지(에뮬레이터 내비는 경유지를 이름만 주고 좌표는 0,0)는 이름이 정확히 같은 곳 하나만
+    if (target.location.lat == 0.0 && target.location.lon == 0.0) return known.filter { it.name.trim() == target.name.trim() }.distinctBy { it.id }.singleOrNull()
     val near = known.filter { it.location.distanceMetersTo(target.location) <= radiusM }
     if (near.size <= 1) return near.firstOrNull()
+    near.singleOrNull { it.name.trim() == target.name.trim() }?.let { return it }
     val words = target.name.split(Regex("[^\\p{L}\\p{N}]+")).filter { it.length >= 2 && it !in GENERIC_WORDS }
     val named = near.filter { s -> words.any { s.name.contains(it) } }
     return named.singleOrNull()

@@ -7,6 +7,8 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.graphics.drawable.Icon
+import com.chargecheck.core.model.StationStatus
+import com.chargecheck.core.model.Verdict
 import com.chargecheck.core.port.VoiceIntent
 import com.chargecheck.feature.session.ChargeSessionMachine
 import com.chargecheck.feature.session.stationId
@@ -15,13 +17,18 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.launch
+import java.time.Duration
+import java.time.Instant
 
 /**
  * 앱 화면이 안 보일 때(운전자가 기본 내비를 보는 중) 카드를 내비 위 알림(헤드업)으로 띄운다. 기획 §9.
  * 화면이 보이면 같은 카드가 화면 안에 나오므로 알림은 지운다. 버튼은 최대 2개, 누르면 [CardActionReceiver]가 처리한다.
  *
  * 띄우는 카드(우선순위 순서는 화면과 같다): 도착 전 경고 > 출발 확인 > 현장 질문 > 가는 길 충전소, 주차 중 충전기 번호.
- * 짧은 안내(8초): 경유지 추가, 실패 기록(번호 질문이 없을 때만), 정상 기록(처음 3번만), 목표 충전량 도달.
+ * 짧은 안내(8초, 무음): 경유지 추가, 실패 기록(번호 질문이 없을 때만), 정상 기록(처음 3번만), 목표 충전량 도달.
+ *
+ * 주행 중에는 내비 길 안내 위에 뜨므로(위치는 Pleos가 정한다) 한눈(2초)에 읽히게 제목·내용을 한 줄로 짧게 쓰고,
+ * 버튼 카드도 누르지 않으면 사라진다: 가는 길 충전소 15초, 도착 전 경고 30초, 출발 확인 45초. 주차 중에는 남겨 둔다.
  */
 internal class CardNotifier(private val context: Context, private val graph: RealGraph) {
 
@@ -32,22 +39,27 @@ internal class CardNotifier(private val context: Context, private val graph: Rea
         createChannels(context)
         val visible = AppVisibility.foreground
         // 같은 카드를 다시 그리지 않도록 '카드 내용'이 바뀔 때만 알림을 고친다
-        show(ID_WARNING, combine(graph.warning.warning, visible) { w, fg ->
+        val parked = graph.drivingState.isParked()
+        show(ID_WARNING, combine(graph.warning.warning, visible, parked) { w, fg, isParked ->
             w?.takeUnless { fg }?.let { warn ->
                 val alt = warn.alternative
+                // "○○ 실패 많음 → △△ 2시간 전 충전" — 대안에도 실제 충전 근거를 붙인다
+                val altText = alt?.let { a -> " → ${short(a.name, 8)}" + (warn.alternativeStatus?.let { " ${shortReason(it)}" } ?: "") }.orEmpty()
                 Card(
-                    "가는 충전소에 최근 실패 기록이 있어요",
-                    "${warn.station.name} · ${warn.reasonText}",
+                    "가는 충전소에 실패 기록",
+                    "${short(warn.station.name, 10)} ${shortReason(warn.status)}$altText",
                     listOfNotNull(
-                        alt?.let { "${it.name.withRo()} 바꾸기" to "${KIND_WARNING}:${VoiceIntent.SWITCH}" },
+                        alt?.let { "${short(it.name, 8).withRo()} 바꾸기" to "${KIND_WARNING}:${VoiceIntent.SWITCH}" },
                         "그대로" to "${KIND_WARNING}:${VoiceIntent.KEEP}",
                     ),
+                    timeoutMs = if (isParked) 0 else WARNING_MS,
                 )
             }
         })
         show(ID_CONFIRM, combine(graph.session.confirm, visible) { c, fg ->
             c?.takeIf { it.visible && !fg }?.let {
-                Card(it.question, "답하면 다음 차가 헛걸음하지 않아요", listOf("응, 안 됐어요" to "$KIND_CONFIRM:yes", "아니요" to "$KIND_CONFIRM:no"))
+                // 주행 중 45초 뒤 숨기는 건 SessionCoordinator(confirmDrivingShow)가 정한다. 알림도 같은 시간에 맞춘다
+                Card("충전이 안 됐나요?", short(it.stationName), listOf("안 됐어요" to "$KIND_CONFIRM:yes", "아니요" to "$KIND_CONFIRM:no"), CONFIRM_MS)
             }
         })
         show(ID_ASK, combine(graph.session.question, visible) { q, fg ->
@@ -57,16 +69,26 @@ internal class CardNotifier(private val context: Context, private val graph: Rea
                 } else {
                     listOf("응, 안 돼요" to "$KIND_ASK:${VoiceIntent.YES}", "아직 연결 중" to "$KIND_ASK:${VoiceIntent.WAIT}")
                 }
-                Card(it.question, "차지체크", buttons)
+                Card(if (it.retro) "아까 충전이 안 됐나요?" else "충전이 안 되나요?", sessionStationName()?.let { n -> short(n) } ?: "차지체크", buttons)
             }
         })
-        show(ID_ROUTE, combine(graph.plan, visible) { p, fg ->
-            p?.takeUnless { fg || !settings.routeCards }?.toCard()?.let { card ->
-                Card(card.title, card.detail, listOfNotNull(("들렀다 가기" to "$KIND_ROUTE:go").takeIf { card.canGo }, "괜찮아요" to "$KIND_ROUTE:no"))
+        show(ID_ROUTE, combine(graph.plan, visible, parked) { p, fg, isParked ->
+            p?.takeUnless { fg || !settings.routeCards }?.let { plan ->
+                val rec = plan.candidates.firstOrNull { it.stop.station.id == plan.recommendedId }
+                val timeout = if (isParked) 0L else ROUTE_MS
+                if (rec == null) {
+                    Card("충전 없이는 못 가요", "가는 길에 갈 수 있는 충전소 없음", listOf("괜찮아요" to "$KIND_ROUTE:no"), timeout)
+                } else {
+                    Card(
+                        "가는 길에 충전이 필요해요",
+                        "${rec.alongKm.toInt()}km 앞 ${short(rec.stop.station.name)} · ${shortReason(rec.stop.status)}",
+                        listOf("들렀다 가기" to "$KIND_ROUTE:go", "괜찮아요" to "$KIND_ROUTE:no"),
+                        timeout,
+                    )
+                }
             }
         })
         // 실패 뒤 "몇 번 충전기였나요?": 차가 서 있을 때만. 2대면 번호 버튼, 많으면 [모르겠어요] + 눌러서 앱에서 고르기
-        val parked = graph.drivingState.isParked()
         show(ID_PICK, combine(graph.session.chargerPick, visible, parked) { pick, fg, isParked ->
             pick?.takeIf { !fg && isParked }?.let {
                 val buttons = if (it.chargers.size == 2) {
@@ -74,7 +96,7 @@ internal class CardNotifier(private val context: Context, private val graph: Rea
                 } else {
                     listOf("모르겠어요" to "$KIND_PICK:")
                 }
-                Card("충전 실패를 기록했어요 · 몇 번 충전기였나요?", "${it.stationName} · 눌러서 고르거나 글레오에게 '15번이었어'라고 말해 주세요", buttons)
+                Card("실패 기록 · 몇 번 충전기였나요?", "${short(it.stationName)} · 누르면 목록에서 골라요", buttons)
             }
         })
         graph.scope.launch {
@@ -94,10 +116,35 @@ internal class CardNotifier(private val context: Context, private val graph: Rea
         }
     }
 
+    /** 결과 안내(무음, 8초). 앱 안 문장을 그대로 쓰지 않고 한 줄로 줄인다. */
     private fun notice(text: String, detail: String? = null) {
         if (!AppVisibility.foreground.value && settings.overlayCards) {
-            post(ID_NOTICE, Card(text, listOfNotNull("차지체크", detail).joinToString(" · "), emptyList()), timeoutMs = 8_000)
+            val title = when {
+                text == ChargeSessionMachine.TOAST_SUCCESS -> "정상 충전 1건 기록"
+                text.startsWith("경유지에 ") -> "경유지 추가 · 내비가 새 길로 안내"
+                text.contains("충전 실패를 기록") -> "충전 실패 기록 · 다음 차에 알려요"
+                else -> text
+            }
+            val sub = detail ?: WAYPOINT.find(text)?.groupValues?.get(1) ?: text.substringBefore(":", "").ifEmpty { null }
+            val line = listOfNotNull("차지체크", sub?.let { short(it) }).joinToString(" · ")
+            post(ID_NOTICE, Card(title, line, emptyList()), NOTICE_MS, CHANNEL_NOTICES)
         }
+    }
+
+    /** 긴 충전소 이름은 줄인다(주행 중 한 줄에 들어가게). */
+    private fun short(name: String, max: Int = 14) = if (name.length <= max) name else name.take(max - 1) + "…"
+
+    /** 판정을 두세 낱말로. */
+    private fun shortReason(s: StationStatus): String = when (s.verdict) {
+        Verdict.GREEN -> s.lastSuccessAt?.let { "${ago(it)} 충전됨" } ?: "최근 정상"
+        Verdict.YELLOW -> "일부 실패"
+        Verdict.RED -> "실패 많음"
+        Verdict.GRAY -> "기록 없음"
+    }
+
+    private fun ago(t: Instant): String {
+        val min = Duration.between(t, Instant.now()).toMinutes().coerceAtLeast(0)
+        return if (min < 60) "${min}분 전" else "${min / 60}시간 전"
     }
 
     /** 지금 세션의 충전소 이름("이 충전소에…" 안내에 붙인다). */
@@ -106,18 +153,18 @@ internal class CardNotifier(private val context: Context, private val graph: Rea
         return graph.stations.value.firstOrNull { it.station.id == id }?.station?.name
     }
 
-    private data class Card(val title: String, val text: String, val buttons: List<Pair<String, String>>)
+    private data class Card(val title: String, val text: String, val buttons: List<Pair<String, String>>, val timeoutMs: Long = 0)
 
     private fun show(id: Int, cards: Flow<Card?>) {
         graph.scope.launch {
             cards.distinctUntilChanged().collect { card ->
-                if (card == null || !settings.overlayCards) nm.cancel(id) else post(id, card)
+                if (card == null || !settings.overlayCards) nm.cancel(id) else post(id, card, card.timeoutMs)
             }
         }
     }
 
-    private fun post(id: Int, card: Card, timeoutMs: Long = 0) {
-        val n = Notification.Builder(context, CHANNEL_CARDS)
+    private fun post(id: Int, card: Card, timeoutMs: Long = 0, channel: String = CHANNEL_CARDS) {
+        val n = Notification.Builder(context, channel)
             .setSmallIcon(R.drawable.ic_stat_chargecheck)
             .setContentTitle(card.title)
             .setContentText(card.text)
@@ -136,6 +183,11 @@ internal class CardNotifier(private val context: Context, private val graph: Rea
 
     companion object {
         const val SUCCESS_NOTICE_LIMIT = 3
+        const val ROUTE_MS = 15_000L
+        const val WARNING_MS = 30_000L
+        const val CONFIRM_MS = 45_000L
+        const val NOTICE_MS = 8_000L
+        private val WAYPOINT = Regex("^경유지에 (.+) 추가")
         const val ID_ROUTE = 10
         const val ID_WARNING = 11
         const val ID_CONFIRM = 12

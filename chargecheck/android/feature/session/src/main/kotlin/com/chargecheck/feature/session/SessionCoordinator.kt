@@ -67,6 +67,10 @@ class SessionCoordinator(
     private val clock: ClockPort,
     private val resolveStation: (RouteTarget) -> Station?,
     private val parked: Flow<Boolean>? = null,
+    /** 이 위치 근처 충전소들. 내비 없이 충전구를 열었을 때 쓴다(앱은 갖고 있는 목록, 없으면 서버에서 받는다). */
+    private val stationsNear: suspend (GeoPoint) -> List<Station> = { emptyList() },
+    /** 충전소별 '아니요' 횟수(앱을 다시 켜도 남게 앱이 저장소를 준다). */
+    private val confirmNoCounts: MutableMap<String, Int> = mutableMapOf(),
 ) {
     private val _state = MutableStateFlow<SessionState>(SessionState.Idle)
     val state: StateFlow<SessionState> = _state.asStateFlow()
@@ -94,6 +98,17 @@ class SessionCoordinator(
     val uploaded: StateFlow<List<ChargeEvent>> = _uploaded.asStateFlow()
 
     private val cfg get() = machine.cfg
+
+    /** 이 차가 충전구 신호를 보내는지. 한 번이라도 신호가 오면 true(그때부터 '충전구를 안 열었으면 묻지 않기'를 쓴다). */
+    private var portSignal = false
+
+    /** 이번 정차에 충전구를 열었는지. 출발하면 지운다. */
+    private var portOpenedThisStop = false
+
+    /** 이번 정차의 충전소가 애매한지(가까운 충전소가 둘). 애매하면 실패는 묻지 않는다. */
+    private var ambiguousThisStop = false
+
+    private var parkedNow = true
 
     /** false = 시동이 꺼져 앱이 멈춘 상태. 이 동안 들어오는 포트 이벤트는 버린다. */
     private val _running = MutableStateFlow(true)
@@ -137,10 +152,18 @@ class SessionCoordinator(
                 }
             },
             scope.launch {
+                vehicle.chargePortOpen().collect { open ->
+                    if (!_running.value) return@collect
+                    portSignal = true
+                    if (open) onChargePortOpened()
+                }
+            },
+            scope.launch {
                 var wasParked: Boolean? = null
                 parked?.distinctUntilChanged()?.collect { now ->
                     val before = wasParked
                     wasParked = now
+                    parkedNow = now
                     if (before == null || !_running.value) return@collect
                     if (before && !now) onDeparting() else if (!before && now) onParked()
                 }
@@ -182,6 +205,8 @@ class SessionCoordinator(
         val c = _confirm.value ?: return
         _confirm.value = null
         if (!yes) {
+            val id = c.event.stationId.value
+            confirmNoCounts[id] = (confirmNoCounts[id] ?: 0) + 1
             log("확인: 충전 문제 아님 → 기록하지 않음")
             return
         }
@@ -269,8 +294,18 @@ class SessionCoordinator(
         when (effect) {
             is Effect.Upload -> upload(effect.event, effect.event.stationId.value.let { id -> _state.value.stationName() ?: id })
             is Effect.ConfirmLater -> {
-                _confirm.value = FailConfirm(effect.event, effect.stationName, clock.now())
-                log("확인 요청: ${effect.stationName}에서 잔량 변화 없이 출발")
+                val skip = when {
+                    portSignal && !portOpenedThisStop -> "충전구를 열지 않았음"
+                    ambiguousThisStop -> "가까운 충전소가 둘이라 어느 쪽인지 모름"
+                    (confirmNoCounts[effect.event.stationId.value] ?: 0) >= cfg.confirmMuteAfterNo -> "이곳에서 '아니요'를 ${cfg.confirmMuteAfterNo}번 답함"
+                    else -> null
+                }
+                if (skip != null) {
+                    log("확인 생략: ${effect.stationName} — $skip")
+                } else {
+                    _confirm.value = FailConfirm(effect.event, effect.stationName, clock.now())
+                    log("확인 요청: ${effect.stationName}에서 잔량 변화 없이 출발")
+                }
             }
             is Effect.Ask -> {
                 _question.value = effect
@@ -319,6 +354,28 @@ class SessionCoordinator(
             log("확인: 답이 없어 기록하지 않음")
         }
         dispatch(SessionInput.Departing(clock.now()))
+        portOpenedThisStop = false
+        ambiguousThisStop = false
+    }
+
+    /**
+     * 충전구가 열림(기획 §5 내비 없이 충전). 주차 중이고 세션이 없으면, 차 위치에서 portRadiusM 안 가장 가까운 충전소로 시작한다.
+     * 충전구를 안 열면 아무것도 하지 않으므로, 충전소 근처에 그냥 주차한 차는 건드리지 않는다.
+     */
+    private suspend fun onChargePortOpened() {
+        portOpenedThisStop = true
+        if (!parkedNow) return
+        val s = _state.value
+        if (s !is SessionState.Idle && s !is SessionState.Approaching && s !is SessionState.Ended) return
+        val here = location.lastKnown() ?: run { log("충전구 열림 — 차 위치를 몰라 시작하지 않음"); return }
+        val near = stationsNear(here)
+            .map { it to it.location.distanceMetersTo(here) }
+            .filter { it.second <= cfg.portRadiusM }
+            .sortedBy { it.second }
+        val (station, dist) = near.firstOrNull() ?: run { log("충전구 열림 — ${cfg.portRadiusM}m 안에 충전소 없음"); return }
+        ambiguousThisStop = near.size >= 2 && near[1].second - dist < cfg.ambiguousGapM
+        log("충전구 열림 → ${station.name}(${dist.toInt()}m)에서 시작" + if (ambiguousThisStop) " · 근처 충전소가 둘(${near[1].first.name})" else "")
+        dispatch(SessionInput.StoppedNearStation(station, clock.now(), cfg.portRadiusM))
     }
 
     /** 주행 → 주차. 출발할 때 못 받은 확인을 한 번 더 띄운다. */

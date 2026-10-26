@@ -49,6 +49,11 @@ class SessionCoordinatorTest {
     private val arrivals = MutableSharedFlow<RouteTarget>(extraBufferCapacity = 4)
     private val locations = MutableSharedFlow<GeoPoint>(extraBufferCapacity = 4)
     private val parked = MutableStateFlow(true)
+    private val port = MutableSharedFlow<Boolean>(extraBufferCapacity = 4)
+    private var here: GeoPoint? = null
+    /** 같은 건물의 다른 운영사 충전소(강남 급속충전소에서 약 11m). */
+    private val nextDoor = Station(StationId("ME000002"), "강남 완속충전소", GeoPoint(37.4980, 127.0276), ChargerType.SLOW)
+    private var known = listOf(station)
     private val uploaded = mutableListOf<ChargeEvent>()
     private var socNow: Int? = null
     private val attached = mutableListOf<Pair<String, String>>()
@@ -62,6 +67,7 @@ class SessionCoordinatorTest {
             override fun soc() = soc
             override suspend fun currentSoc(): Int? = socNow
             override suspend fun chargeTargetPct(): Int? = 80
+            override fun chargePortOpen() = port
         },
         navi = object : NaviPort {
             override fun routeTargets() = targets
@@ -71,7 +77,7 @@ class SessionCoordinatorTest {
         },
         location = object : LocationPort {
             override fun locations() = locations
-            override suspend fun lastKnown(): GeoPoint? = null
+            override suspend fun lastKnown(): GeoPoint? = here
         },
         api = object : ChargeCheckApiPort {
             override suspend fun postEvent(event: ChargeEvent): Result<Unit> = Result.success(Unit).also { uploaded += event }
@@ -87,6 +93,7 @@ class SessionCoordinatorTest {
         clock = object : ClockPort { override fun now(): Instant = now.value },
         resolveStation = { if (it.poiId == station.id.value) station else null },
         parked = parked,
+        stationsNear = { known },
     )
 
     private fun at(min: Long) = t0 + Duration.ofMinutes(min)
@@ -304,5 +311,76 @@ class SessionCoordinatorTest {
         val e = uploaded.single()
         assertEquals(Triple(ChargeResult.FAIL, DetectMode.MANUAL, 30), Triple(e.result, e.mode, e.socEnd))
         assertNotNull(coordinator.chargerPick.value)
+    }
+
+    // ---------------------------------------------------------------- 내비 없이 충전 (기획 §5)
+
+    @Test
+    fun `내비 없이 충전구를 열고 잔량이 오르면 정상 기록`() = runTest(UnconfinedTestDispatcher()) {
+        here = GeoPoint(37.4983, 127.0276) // 충전소에서 약 45m
+        socNow = 42
+        coordinator.start(backgroundScope, now)
+        port.emit(true)
+        assertIs<SessionState.Candidate>(coordinator.state.value)
+        now.value = at(5)
+        soc.emit(SocSample(43, at(7)))
+        assertEquals(listOf(ChargeResult.SUCCESS), uploaded.map { it.result })
+        assertEquals(station.id, uploaded.single().stationId)
+    }
+
+    @Test
+    fun `충전구를 열어도 80m 안에 충전소가 없으면 시작하지 않는다`() = runTest(UnconfinedTestDispatcher()) {
+        here = GeoPoint(37.5000, 127.0276) // 약 230m
+        coordinator.start(backgroundScope, now)
+        port.emit(true)
+        assertIs<SessionState.Idle>(coordinator.state.value)
+    }
+
+    @Test
+    fun `충전구를 열고 잔량 그대로 떠나면 확인을 묻는다`() = runTest(UnconfinedTestDispatcher()) {
+        here = station.location
+        socNow = 42
+        coordinator.start(backgroundScope, now)
+        port.emit(true)
+        now.value = at(3)
+        parked.value = false
+        assertEquals("아까 강남 급속충전소에서 충전이 안 됐나요?", assertNotNull(coordinator.confirm.value).question)
+    }
+
+    @Test
+    fun `충전구 신호가 있는 차가 충전구를 안 열고 떠나면 묻지 않는다`() = runTest(UnconfinedTestDispatcher()) {
+        coordinator.start(backgroundScope, now)
+        port.emit(false) // 신호는 오지만 닫혀 있음
+        departWithoutCharge() // 내비로 충전소에 도착했다가 그냥 떠남
+        assertNull(coordinator.confirm.value)
+    }
+
+    @Test
+    fun `가까운 충전소가 둘이면 성공은 가까운 곳으로, 실패는 묻지 않는다`() = runTest(UnconfinedTestDispatcher()) {
+        known = listOf(station, nextDoor)
+        here = station.location
+        socNow = 42
+        coordinator.start(backgroundScope, now)
+        port.emit(true)
+        assertEquals(station, (coordinator.state.value as SessionState.Candidate).station)
+        now.value = at(3)
+        parked.value = false
+        assertNull(coordinator.confirm.value)
+    }
+
+    @Test
+    fun `같은 충전소에서 아니요를 두 번 답하면 그다음부터 묻지 않는다`() = runTest(UnconfinedTestDispatcher()) {
+        here = station.location
+        socNow = 42
+        coordinator.start(backgroundScope, now)
+        repeat(3) { i ->
+            parked.value = true
+            port.emit(false)
+            port.emit(true)
+            now.value = at(10L * i + 3)
+            parked.value = false
+            if (i < 2) coordinator.answerConfirm(yes = false) else assertNull(coordinator.confirm.value)
+            now.value = at(10L * i + 8)
+        }
     }
 }

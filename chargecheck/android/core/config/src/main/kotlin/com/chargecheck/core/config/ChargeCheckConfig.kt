@@ -10,6 +10,12 @@ import java.time.Duration
 data class ChargeCheckConfig(
     /** 충전소 좌표에서 이 거리 안이면 '현장'. */
     val onsiteRadiusM: Int = 50,
+    /** 내비 없이 충전구를 열었을 때 이 거리 안 충전소를 찾는다(좌표 오차·큰 주차장을 감안해 onsiteRadiusM보다 넓게). */
+    val portRadiusM: Int = 80,
+    /** 가장 가까운 두 충전소의 거리 차이가 이보다 작으면 어느 쪽인지 애매하다고 본다(실패는 묻지 않는다). */
+    val ambiguousGapM: Int = 20,
+    /** 같은 충전소에서 실패 확인에 '아니요'를 이만큼 답하면 그곳에서는 더 묻지 않는다(집·회사 등). */
+    val confirmMuteAfterNo: Int = 2,
     /** 이만큼 정차해야 세션 시작. */
     val onsiteMinStop: Duration = Duration.ofMinutes(5),
     /** 이만큼 벗어나면 세션 종료. */

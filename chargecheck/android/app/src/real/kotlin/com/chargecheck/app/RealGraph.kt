@@ -1,6 +1,7 @@
 package com.chargecheck.app
 
 import android.content.Context
+import android.util.Log
 import android.content.pm.ApplicationInfo
 import com.chargecheck.adapter.android.CarUxRestrictionsAdapter
 import com.chargecheck.adapter.pleos.PleosNaviAdapter
@@ -34,6 +35,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
@@ -50,6 +52,9 @@ internal val DEFAULT_AREA = GeoPoint(37.4979, 127.0276)
 
 /** 주행 중 경로 카드를 보여주는 시간. 지나면 숨기고(내비를 가리지 않게) 주차하면 패널로 다시 보인다. */
 private val ROUTE_CARD_DRIVING = Duration.ofSeconds(15)
+
+/** 목적지가 바뀐 뒤 내비가 충전소를 자동 추천해 경유지로 넣을 시간을 기다린다. 넣으면 우리 카드는 띄우지 않는다. */
+private val NAVI_RECOMMEND_WAIT = Duration.ofSeconds(5)
 
 /**
  * real flavor의 앱 전체 상태. Pleos Vehicle·NaviHelper·CarUxRestrictions 어댑터와 ChargeCheck 서버를
@@ -119,7 +124,10 @@ internal class RealGraph private constructor(context: Context) {
     }
 
     /** 기획 §7 StationResolver: POI ID → 100m 안 하나 → 이름이 겹치는 곳. 애매하면 null. */
-    val resolve: (RouteTarget) -> Station? = { target -> matchStation(target, stations.value.map { it.station }) }
+    val resolve: (RouteTarget) -> Station? = { target -> matchStation(target, stations.value.map { it.station } + routeStations.value) }
+
+    /** 내비 경로 위(멀리 있는) 충전소. 차 주변 목록에 없는 경유지를 알아보려고 그 위치 주변을 따로 받아 둔다. */
+    private val routeStations = MutableStateFlow<List<Station>>(emptyList())
 
     val session = SessionCoordinator(
         machine = ChargeSessionMachine(DeviceId(UUID.randomUUID().toString()), { UUID.randomUUID().toString() }, config),
@@ -130,6 +138,8 @@ internal class RealGraph private constructor(context: Context) {
         clock = clock,
         resolveStation = resolve,
         parked = drivingState.isParked(),
+        stationsNear = { here -> stationsNear(here) },
+        confirmNoCounts = PrefsCounts(prefs, "confirm_no_"),
     )
     val warning = ArrivalWarningCoordinator(navi, api, navi, resolve, log = session::note, enabled = { settings.arrivalWarning })
     private var notifier: CardNotifier? = null
@@ -151,6 +161,53 @@ internal class RealGraph private constructor(context: Context) {
     /** 디버그 빌드 전용: 남은 주행 8km·배터리 8%로 흉내(에뮬레이터에서 Virtual Console 없이 카드 확인). */
     var devLowBattery = false
 
+    /** 내비 경로가 바뀔 때: 경유지 충전소를 알아보고(멀면 서버에서 받는다), 생기면 우리 경로 카드를 닫는다. */
+    private suspend fun onRouteTargets(targets: List<RouteTarget>) {
+        val waypoints = targets.dropLast(1)
+        val unknown = waypoints.filter { resolve(it) == null }
+        if (unknown.isNotEmpty()) {
+            val fetched = unknown.flatMap { t -> fetchRouteStations(t) }
+            if (fetched.isNotEmpty()) routeStations.value = (routeStations.value + fetched).distinctBy { it.id }.takeLast(200)
+        }
+        val station = stationWaypoint(targets) ?: run {
+            if (waypoints.isNotEmpty()) {
+                val w = waypoints.first()
+                Log.d("ChargeCheck", "경유지 못 알아봄: ${w.name} @ ${w.location} · 받아 둔 경로 충전소 ${routeStations.value.size}곳: " +
+                    routeStations.value.joinToString { "${it.name}(${it.location.distanceMetersTo(w.location).toInt()}m)" })
+                session.note("경유지 ${waypoints.joinToString { it.name }}: 충전소로 못 알아봄")
+            }
+            return
+        }
+        if (plan.value != null) {
+            session.note("내비가 ${station.name}을(를) 경유지로 넣음 → 우리 경로 카드 닫음")
+            closeRoute()
+        }
+        // 새로 알아본 경유지 충전소를 검증하고, 세션도 그 충전소로 가는 중으로 둔다
+        warning.onTargets(targets)
+        // 가는 충전소가 바뀌었으면(경유지 교체 등) 세션도 새 충전소로
+        val s = session.state.value
+        if (s is SessionState.Idle || (s is SessionState.Approaching && s.station.id != station.id)) {
+            session.dispatch(SessionInput.RouteTargetIsStation(station))
+        }
+    }
+
+    /** 경유지 주변 충전소를 받는다. 좌표가 없으면(0,0) 이름으로 찾아 그 위치 주변을 받는다. */
+    private suspend fun fetchRouteStations(t: RouteTarget): List<Station> {
+        val at = if (t.location.lat != 0.0 || t.location.lon != 0.0) {
+            t.location
+        } else {
+            api.searchPlaces(t.name, navi.lastKnown() ?: DEFAULT_AREA).getOrNull().orEmpty()
+                .firstOrNull { it.stationId != null && it.name.trim() == t.name.trim() }?.location ?: return emptyList()
+        }
+        return api.nearbyWithStatus(at, 150).getOrNull().orEmpty().map { it.station }
+    }
+
+    /** 경로의 경유지(목적지 제외) 중 첫 충전소. */
+    private fun stationWaypoint(targets: List<RouteTarget>, extra: List<Station> = emptyList()): Station? {
+        val known = stations.value.map { it.station } + routeStations.value + extra
+        return targets.dropLast(1).firstNotNullOfOrNull { matchStation(it, known) }
+    }
+
     /** 경로 카드에 '괜찮아요'를 연속으로 누른 횟수. 2번이면 정말 못 갈 때만 띄운다. */
     private var dismissStreak: Int
         get() = prefs.getInt("route_dismiss_streak", 0)
@@ -170,7 +227,9 @@ internal class RealGraph private constructor(context: Context) {
                 delay(30_000)
             }
         }
-        scope.launch { navi.destination().collect { onDestination(it) } }
+        // 새 목적지가 오면 이전 판단(5초 기다리는 중 포함)은 버린다
+        scope.launch { navi.destination().collectLatest { onDestination(it) } }
+        scope.launch { navi.routeTargets().collect { onRouteTargets(it) } }
         scope.launch {
             drivingState.isParked().collect { parked ->
                 val departed = parkedNow && !parked
@@ -255,10 +314,11 @@ internal class RealGraph private constructor(context: Context) {
             session.note("가는 길 충전소 조회 실패 — 서버 연결 확인")
             return
         }
-        // 이미 충전소를 경유지로 넣어 뒀으면(직접, 내비 자동, 앱 재시작 전) 다시 권하지 않는다
-        val known = stations.value.map { it.station } + p.candidates.map { it.stop.station }
-        if (navi.routeTargets().first().dropLast(1).any { matchStation(it, known) != null }) {
-            session.note("목적지 ${dest.name}: 이미 충전소를 경유지로 넣어 둠 → 카드 생략")
+        // 내비가 충전이 필요하다고 보면 스스로 충전소를 추천해 경유지로 넣는다. 그 시간을 조금 기다린 뒤,
+        // 경유지에 충전소가 있으면(직접·내비 자동·앱 재시작 전) 우리 카드는 띄우지 않고 그 충전소를 검증만 한다.
+        delay(NAVI_RECOMMEND_WAIT.toMillis())
+        if (stationWaypoint(navi.routeTargets().first(), p.candidates.map { it.stop.station }) != null) {
+            session.note("목적지 ${dest.name}: 경유지에 충전소가 있음 → 카드 대신 그 충전소 검증")
             return
         }
         if (!shouldShowRouteCard(p, dismissStreak)) {
@@ -328,6 +388,21 @@ internal class RealGraph private constructor(context: Context) {
         routeCardJob?.cancel()
     }
 
+    /** 이 위치 300m 안 충전소. 갖고 있는 목록에 없으면(지도가 다른 지역을 보고 있었으면) 서버에서 받는다. */
+    private suspend fun stationsNear(here: GeoPoint): List<Station> {
+        val cached = stations.value.map { it.station }.filter { it.location.distanceMetersTo(here) <= 300 }
+        if (cached.isNotEmpty()) return cached
+        return api.nearbyWithStatus(here, 300).getOrNull().orEmpty().map { it.station }
+    }
+
+    /** 디버그 빌드: 내비가 충전소를 자동 추천해 경유지로 넣은 상황을 재현(에뮬레이터 내비는 충전소를 추천하지 않는다). */
+    suspend fun devNaviPicksStation() {
+        val here = navi.lastKnown() ?: return
+        val station = stationsNear(here).minByOrNull { it.location.distanceMetersTo(here) } ?: return
+        session.note("개발용: 내비가 ${station.name}을(를) 경유지로 넣은 상황")
+        navi.addWaypoint(RouteTarget(station.name, station.location, null))
+    }
+
     /** 지금 차가 있는 충전소: 진행 중인 세션의 충전소, 아니면 차에서 150m 안 가장 가까운 곳. */
     suspend fun stationHere(): Station? {
         val known = stations.value.map { it.station }
@@ -344,4 +419,14 @@ internal class RealGraph private constructor(context: Context) {
         val id = prefs.getString("device_id", null) ?: UUID.randomUUID().toString().also { prefs.edit().putString("device_id", it).apply() }
         return DeviceId(id)
     }
+}
+
+/** 충전소별 '아니요' 횟수를 앱을 다시 켜도 남게 SharedPreferences에 둔다(키 = [prefix] + 충전소 ID). */
+private class PrefsCounts(private val prefs: android.content.SharedPreferences, private val prefix: String) : AbstractMutableMap<String, Int>() {
+    override fun put(key: String, value: Int): Int? = get(key).also { prefs.edit().putInt(prefix + key, value).apply() }
+    override fun get(key: String): Int? = if (prefs.contains(prefix + key)) prefs.getInt(prefix + key, 0) else null
+    override val entries: MutableSet<MutableMap.MutableEntry<String, Int>>
+        get() = prefs.all.filterKeys { it.startsWith(prefix) }
+            .mapNotNull { (k, v) -> (v as? Int)?.let { java.util.AbstractMap.SimpleEntry(k.removePrefix(prefix), it) } }
+            .toMutableSet()
 }

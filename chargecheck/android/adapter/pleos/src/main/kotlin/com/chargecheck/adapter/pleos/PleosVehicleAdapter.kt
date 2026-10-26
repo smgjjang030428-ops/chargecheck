@@ -2,6 +2,7 @@ package com.chargecheck.adapter.pleos
 
 import ai.pleos.playground.vehicle.Vehicle
 import ai.pleos.playground.vehicle.listener.EvBatteryStateOfChargeListener
+import ai.pleos.playground.vehicle.listener.EvChargePortOpenListener
 import android.content.Context
 import android.util.Log
 import com.chargecheck.core.model.SocSample
@@ -52,6 +53,23 @@ class PleosVehicleAdapter(context: Context, private val clock: ClockPort) : Vehi
             },
         )
     }
+
+    /** 충전구 열림·닫힘(권한 CAR_ENERGY). 내비 없이 충전소에 온 차가 '충전하려 했다'는 증거로 쓴다. */
+    override fun chargePortOpen(): Flow<Boolean> = callbackFlow {
+        val listener = object : EvChargePortOpenListener {
+            override fun onEvChargePortOpenUpdated(value: Boolean?) {
+                Log.d(TAG, "충전구 이벤트: $value")
+                if (value != null) trySend(value)
+            }
+
+            override fun onFailed(e: Exception) {
+                Log.w(TAG, "충전구 구독 실패", e)
+            }
+        }
+        battery.registerEvChargePortOpen(listener)
+        battery.isEvChargePortOpen({ value -> if (value != null) trySend(value) }, { e -> Log.w(TAG, "충전구 읽기 실패", e) })
+        awaitClose { battery.unregisterEvChargePortOpen(listener) }
+    }.distinctUntilChanged()
 
     /** 목표 충전량을 읽는 API가 Vehicle SDK 2.3.2에는 없다(설정·지원 범위만 있음). ⚠️ */
     override suspend fun chargeTargetPct(): Int? = null
