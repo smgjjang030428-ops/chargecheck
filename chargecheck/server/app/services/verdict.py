@@ -103,19 +103,22 @@ def _latest(*times: datetime | None) -> datetime | None:
 
 def _judge_charger(c: ChargerIn, own: list[EventIn], station_success: datetime | None, now: datetime) -> ChargerVerdict:
     state = public_state(c.public_stat)
-    user_success = _latest(_last_success(own), station_success)
+    # 실패를 지우는 건 이 충전기에서 확인된 신호뿐이다. 번호 없는 성공(station_success)은 어느 충전기였는지 모르므로
+    # 이 충전기의 실패를 지우지 않고, 남은 실패가 없을 때만 '최근 충전됨'으로 보여 준다.
+    own_success = _last_success(own)
     public_charging = _in_window(c.last_charging_at, now)
     repaired = _in_window(c.repaired_at, now)
-    last_success = _latest(user_success, public_charging)
-    reset = _latest(last_success, repaired)
+    reset = _latest(own_success, public_charging, repaired)
     fails = _distinct_fail_devices_after(own, reset)
     last_fail = _last_fail_after(own, reset)
+    user_success = own_success if fails else _latest(own_success, station_success)
+    last_success = _latest(user_success, public_charging)
     # 무엇이 실패를 지웠나(운영사 리포트의 '해결 이유')
     cleared_by = None
     if reset is not None:
         if reset == repaired:
             cleared_by = "OPERATOR_STATUS"
-        elif reset == public_charging and reset != user_success:
+        elif reset == public_charging and reset != own_success:
             cleared_by = "PUBLIC_CHARGING"
         else:
             cleared_by = "USER_SUCCESS"
@@ -159,7 +162,7 @@ def _compute(chargers: list[ChargerIn], events: list[EventIn], now: datetime) ->
     for e in events:
         (by_charger[e.charger_id] if e.charger_id else unassigned).append(e)
 
-    # 번호 없는 SUCCESS는 "이 충전소 어딘가에서 충전됨"이라 모든 충전기의 최근 성공으로 친다.
+    # 번호 없는 SUCCESS는 "이 충전소 어딘가에서 충전됨"이다. 실패 기록이 없는 충전기의 최근 성공으로만 친다.
     unassigned_success = _last_success(unassigned)
     judged = [_judge_charger(c, by_charger.get(c.charger_id, []), unassigned_success, now) for c in chargers]
 

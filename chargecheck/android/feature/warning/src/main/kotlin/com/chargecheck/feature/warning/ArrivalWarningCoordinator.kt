@@ -15,7 +15,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /** 화면에 띄울 도착 전 경고 한 건. */
 data class ArrivalWarning(
@@ -91,7 +93,7 @@ class ArrivalWarningCoordinator(
         val alt = w.alternative
         if (intent == VoiceIntent.SWITCH && alt != null) {
             val target = RouteTarget(alt.name, alt.location, alt.id.value)
-            val index = w.waypointIndex
+            val index = waypointIndexNow(w.station) ?: w.waypointIndex
             if (index != null) {
                 navi.replaceWaypoint(index, target)
                 log("경유지 교체: ${w.station.name} → ${alt.name}")
@@ -102,6 +104,15 @@ class ArrivalWarningCoordinator(
         } else {
             log("경고 닫음: ${w.station.name}(으)로 그대로 감")
         }
+    }
+
+    /**
+     * 누를 때의 경로에서 경고한 충전소가 경유지인지 다시 본다. 경유지를 넣은 직후 내비가 경로를 다시 짜는 동안에는
+     * 목적지가 잠깐 비어 경유지가 목적지처럼 보인다(에뮬레이터 2026-10-28: 그때 판단해서 교체 대신 추가됨).
+     */
+    private suspend fun waypointIndexNow(station: Station): Int? {
+        val targets = withTimeoutOrNull(1_000) { navi.routeTargets().first() } ?: return null
+        return targets.indexOfFirst { resolveStation(it)?.id == station.id }.takeIf { it in 0 until targets.lastIndex }
     }
 
     private suspend fun check(station: Station, waypointIndex: Int? = null) {

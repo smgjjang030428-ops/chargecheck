@@ -75,15 +75,16 @@ class PleosVehicleAdapter(context: Context, private val clock: ClockPort) : Vehi
     override suspend fun chargeTargetPct(): Int? = null
 
     /**
-     * 남은 주행 가능 거리. SDK 문서에 단위가 없어 Android VHAL(RANGE_REMAINING, 미터)을 따른다.
-     * ⚠️ UNVERIFIED: 실제 차에서 km로 오면 2,000 미만 값이 들어오므로 그대로 km로 본다.
+     * 남은 주행 가능 거리. 단위는 미터로 정한다: Android VHAL RANGE_REMAINING이 미터이고, Pleos 에뮬레이터에서도 미터로 왔다.
+     * 값 크기로 단위를 추측하지 않는다(m로 1,500이 오면 1,500km로 읽게 된다).
+     * 미터로 읽어 [MAX_RANGE_KM]를 넘는 값은 단위가 다르다는 뜻이므로 모르는 것(null)으로 둔다. ⚠️ 실차 단위는 설명회에서 확인.
      */
     override suspend fun remainingRangeKm(): Double? = suspendCancellableCoroutine { cont ->
         vehicle.getOdometer().getRangeRemainingDistance(
             { value ->
                 Log.d(TAG, "남은 주행 가능 거리 원값: $value")
-                val km = value?.toDouble()?.let { if (it >= 2_000) it / 1000 else it }
-                if (cont.isActive) cont.resume(km?.takeIf { it > 0 })
+                val km = value?.toDouble()?.div(METERS_PER_KM)
+                if (cont.isActive) cont.resume(km?.takeIf { it > 0 && it <= MAX_RANGE_KM })
             },
             { e ->
                 Log.w(TAG, "남은 주행 가능 거리 읽기 실패", e)
@@ -94,3 +95,8 @@ class PleosVehicleAdapter(context: Context, private val clock: ClockPort) : Vehi
 
     fun release() = vehicle.release()
 }
+
+private const val METERS_PER_KM = 1000.0
+
+/** 승용 전기차가 한 번 충전으로 갈 수 있는 거리의 넉넉한 상한. 이보다 크면 단위가 잘못 들어온 값이다. */
+private const val MAX_RANGE_KM = 1_200.0

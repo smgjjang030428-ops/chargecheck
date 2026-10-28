@@ -34,8 +34,23 @@ def test_f_3시간_안_정상_기록이면_GREEN():
     v = compute_verdict(chargers("2", "2"), [ok("a", 30)], NOW)
     assert (v.verdict, v.reason_code) == ("GREEN", "RECENT_SUCCESS")
     assert v.message == "30분 전 실제로 충전됨"
-    # 번호 없는 정상 기록은 모든 충전기의 최근 성공으로 친다
+    # 번호 없는 정상 기록은 실패 기록이 없는 충전기의 최근 성공으로 친다
     assert {c.verdict for c in v.chargers} == {"GREEN"}
+
+
+def test_번호_없는_성공은_다른_충전기의_실패를_지우지_않는다():
+    events = [fail("a", 50, "02"), fail("b", 40, "02"), ok("c", 10)]
+    v = compute_verdict(chargers("2", "2", "2"), events, NOW)
+    c2 = next(c for c in v.chargers if c.charger_id == "02")
+    assert (c2.verdict, c2.reason_code, c2.cleared_by) == ("RED", "PUBLIC_SAYS_OK_BUT_FAILS", None)
+    assert {c.verdict for c in v.chargers if c.charger_id != "02"} == {"GREEN"}
+    assert (v.verdict, v.reason_code) == ("YELLOW", "SOME_CHARGERS_FAIL")  # 충전소 전체가 초록이 되지 않는다
+
+
+def test_번호_있는_성공은_그_충전기의_실패를_지운다():
+    events = [fail("a", 50, "02"), fail("b", 40, "02"), ok("c", 10, "02")]
+    c2 = next(c for c in compute_verdict(chargers("2", "2"), events, NOW).chargers if c.charger_id == "02")
+    assert (c2.verdict, c2.cleared_by) == ("GREEN", "USER_SUCCESS")
 
 
 def test_핵심_6대_중_1대가_두_번_실패해도_충전소는_빨강이_아니라_노랑():

@@ -1,5 +1,6 @@
 package com.chargecheck.feature.session
 
+import com.chargecheck.core.model.ArrivalSnapshot
 import com.chargecheck.core.model.ChargeEvent
 import com.chargecheck.core.model.ChargeResult
 import com.chargecheck.core.model.ChargerStatus
@@ -19,6 +20,7 @@ import com.chargecheck.core.port.VehiclePort
 import com.chargecheck.core.port.VoiceIntent
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -30,6 +32,23 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.time.Duration
 import java.time.Instant
+
+/**
+ * 도착 스냅샷 저장소. 시동이 꺼져 앱 프로세스가 죽어도 충전 전 잔량을 잃지 않게 한다(기획 §5 RETRO).
+ * 앱이 SharedPreferences 같은 영구 저장소로 구현해 준다.
+ */
+interface SnapshotStore {
+    fun load(): ArrivalSnapshot?
+    fun save(snap: ArrivalSnapshot)
+    fun clear()
+
+    /** 저장하지 않음(시연·테스트). */
+    object None : SnapshotStore {
+        override fun load(): ArrivalSnapshot? = null
+        override fun save(snap: ArrivalSnapshot) = Unit
+        override fun clear() = Unit
+    }
+}
 
 /** 화면에 보여줄 기록 한 줄. */
 data class LogEntry(val at: Instant, val text: String)
@@ -71,6 +90,8 @@ class SessionCoordinator(
     private val stationsNear: suspend (GeoPoint) -> List<Station> = { emptyList() },
     /** 충전소별 '아니요' 횟수(앱을 다시 켜도 남게 앱이 저장소를 준다). */
     private val confirmNoCounts: MutableMap<String, Int> = mutableMapOf(),
+    /** 도착 스냅샷 영구 저장소. 앱이 다시 켜지면 [restore]가 읽어 RETRO 판정을 이어 간다. */
+    private val snapshots: SnapshotStore = SnapshotStore.None,
 ) {
     private val _state = MutableStateFlow<SessionState>(SessionState.Idle)
     val state: StateFlow<SessionState> = _state.asStateFlow()
@@ -270,6 +291,26 @@ class SessionCoordinator(
         dispatch(SessionInput.AppResumed(vehicle.currentSoc(), location.lastKnown(), clock.now()))
     }
 
+    /**
+     * 앱 프로세스가 새로 시작됐을 때 한 번(부팅·재시동). 저장된 도착 스냅샷이 있으면 꺼져 있던 것으로 보고
+     * 지금 잔량과 비교한다(RETRO). 차량 SDK가 막 연결돼 잔량을 아직 못 읽으면 잠깐 기다린다.
+     */
+    suspend fun restore(socWait: Duration = Duration.ofSeconds(30)) {
+        val snap = snapshots.load() ?: return
+        if (_state.value != SessionState.Idle) return
+        _state.value = SessionState.Suspended(snap)
+        log("재시동: ${snap.stationName} 도착 기록 복원 (SOC ${snap.soc}%)")
+        var soc = vehicle.currentSoc()
+        val tries = (socWait.toMillis() / SOC_RETRY_MS).toInt()
+        repeat(tries) {
+            if (soc != null) return@repeat
+            delay(SOC_RETRY_MS)
+            soc = vehicle.currentSoc()
+        }
+        log("재시동 → 앱 다시 실행 (SOC ${soc ?: "?"}%)")
+        dispatch(SessionInput.AppResumed(soc, location.lastKnown(), clock.now()))
+    }
+
     /** 다른 기능(도착 전 경고 등)이 같은 기록 화면에 남길 때. */
     fun note(text: String) = log(text)
 
@@ -318,8 +359,11 @@ class SessionCoordinator(
             }
             is Effect.ScheduleTick -> mutex.withLock { pendingTicks += effect.at }
             // 정상 기록 뒤 successSent 표시만 바꾸는 저장은 기록하지 않는다
-            is Effect.SaveSnapshot -> if (!effect.snap.successSent) log("도착 스냅샷 저장 (SOC ${effect.snap.soc}%)")
-            Effect.ClearSnapshot -> Unit
+            is Effect.SaveSnapshot -> {
+                snapshots.save(effect.snap)
+                if (!effect.snap.successSent) log("도착 스냅샷 저장 (SOC ${effect.snap.soc}%)")
+            }
+            Effect.ClearSnapshot -> snapshots.clear()
             Effect.NotifyComplete -> {
                 _toast.value = "목표 충전량에 도달했어요"
                 log("알림: 목표 충전량에 도달했어요")
@@ -473,3 +517,5 @@ fun SessionState.label(): String = when (this) {
     is SessionState.AskingRetro -> "운전자 확인 중 (사후)"
     is SessionState.Ended -> "충전소를 떠남"
 }
+
+private const val SOC_RETRY_MS = 2_000L

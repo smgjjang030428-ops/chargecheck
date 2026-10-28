@@ -1,5 +1,6 @@
 package com.chargecheck.feature.session
 
+import com.chargecheck.core.model.ArrivalSnapshot
 import com.chargecheck.core.model.ChargeEvent
 import com.chargecheck.core.model.ChargeResult
 import com.chargecheck.core.model.ChargerStatus
@@ -61,7 +62,16 @@ class SessionCoordinatorTest {
         ChargerStatus("0$it", ChargerType.FAST, PublicState.AVAILABLE, Verdict.GRAY, 0)
     }
 
-    private val coordinator = SessionCoordinator(
+    /** 앱 프로세스가 죽어도 남는 저장소 대신. */
+    private val store = object : SnapshotStore {
+        var snap: ArrivalSnapshot? = null
+        override fun load() = snap
+        override fun save(snap: ArrivalSnapshot) { this.snap = snap }
+        override fun clear() { snap = null }
+    }
+
+    /** 새 앱 프로세스 하나. 저장소만 이어진다. */
+    private fun newCoordinator() = SessionCoordinator(
         machine = ChargeSessionMachine(DeviceId("test"), { "e${uploaded.size}" }),
         vehicle = object : VehiclePort {
             override fun soc() = soc
@@ -94,7 +104,10 @@ class SessionCoordinatorTest {
         resolveStation = { if (it.poiId == station.id.value) station else null },
         parked = parked,
         stationsNear = { known },
+        snapshots = store,
     )
+
+    private val coordinator = newCoordinator()
 
     private fun at(min: Long) = t0 + Duration.ofMinutes(min)
 
@@ -382,5 +395,33 @@ class SessionCoordinatorTest {
             if (i < 2) coordinator.answerConfirm(yes = false) else assertNull(coordinator.confirm.value)
             now.value = at(10L * i + 8)
         }
+    }
+
+    @Test
+    fun `앱 프로세스가 죽었다 다시 켜져도 충전 전 잔량과 비교해 정상 기록을 남긴다`() = runTest(UnconfinedTestDispatcher()) {
+        coordinator.start(backgroundScope, now)
+        arrivals.emit(target)
+        soc.emit(SocSample(42, t0))
+        now.value = at(5)
+        assertIs<SessionState.Monitoring>(coordinator.state.value)
+        assertEquals(42, store.snap?.soc) // 도착 스냅샷이 영구 저장소에 있다
+
+        // 시동이 꺼져 프로세스가 통째로 사라짐 → 40분 뒤 새 프로세스. 그사이 충전돼 60%
+        coordinator.stop()
+        now.value = at(45)
+        socNow = 60
+        val restarted = newCoordinator()
+        restarted.start(backgroundScope, now)
+        restarted.restore()
+        assertEquals(listOf(ChargeResult.SUCCESS), uploaded.map { it.result })
+        assertEquals(DetectMode.RETRO, uploaded.single().mode)
+        assertIs<SessionState.Charging>(restarted.state.value)
+    }
+
+    @Test
+    fun `저장된 스냅샷이 없으면 복원하지 않는다`() = runTest(UnconfinedTestDispatcher()) {
+        coordinator.restore()
+        assertIs<SessionState.Idle>(coordinator.state.value)
+        assertEquals(emptyList<ChargeEvent>(), uploaded)
     }
 }

@@ -140,6 +140,7 @@ internal class RealGraph private constructor(context: Context) {
         parked = drivingState.isParked(),
         stationsNear = { here -> stationsNear(here) },
         confirmNoCounts = PrefsCounts(prefs, "confirm_no_"),
+        snapshots = PrefsSnapshotStore(prefs),
     )
     val warning = ArrivalWarningCoordinator(navi, api, navi, resolve, log = session::note, enabled = { settings.arrivalWarning })
     private var notifier: CardNotifier? = null
@@ -215,6 +216,8 @@ internal class RealGraph private constructor(context: Context) {
 
     private fun start() {
         session.start(scope, time)
+        // 시동이 꺼져 프로세스가 죽었다 다시 켜졌으면 충전 전 잔량과 비교해 이어 간다
+        scope.launch { session.restore() }
         warning.start(scope)
         scope.launch {
             while (true) {
@@ -422,6 +425,37 @@ internal class RealGraph private constructor(context: Context) {
 }
 
 /** 충전소별 '아니요' 횟수를 앱을 다시 켜도 남게 SharedPreferences에 둔다(키 = [prefix] + 충전소 ID). */
+/** 도착 스냅샷을 SharedPreferences 한 칸에 저장한다. 형식이 맞지 않으면 없는 것으로 본다. */
+private class PrefsSnapshotStore(private val prefs: android.content.SharedPreferences) : com.chargecheck.feature.session.SnapshotStore {
+    override fun load(): com.chargecheck.core.model.ArrivalSnapshot? = runCatching {
+        val f = prefs.getString(KEY, null)?.split(SEP) ?: return null
+        com.chargecheck.core.model.ArrivalSnapshot(
+            stationId = com.chargecheck.core.model.StationId(f[0]),
+            stationName = f[1],
+            chargerType = com.chargecheck.core.model.ChargerType.valueOf(f[2]),
+            soc = f[3].toInt(),
+            at = Instant.ofEpochMilli(f[4].toLong()),
+            location = if (f[5].isEmpty()) null else GeoPoint(f[5].toDouble(), f[6].toDouble()),
+            successSent = f[7].toBoolean(),
+        )
+    }.getOrNull()
+
+    override fun save(snap: com.chargecheck.core.model.ArrivalSnapshot) {
+        val f = listOf(
+            snap.stationId.value, snap.stationName, snap.chargerType.name, snap.soc.toString(), snap.at.toEpochMilli().toString(),
+            snap.location?.lat?.toString().orEmpty(), snap.location?.lon?.toString().orEmpty(), snap.successSent.toString(),
+        )
+        prefs.edit().putString(KEY, f.joinToString(SEP)).apply()
+    }
+
+    override fun clear() = prefs.edit().remove(KEY).apply()
+
+    private companion object {
+        const val KEY = "arrival_snapshot"
+        const val SEP = ""
+    }
+}
+
 private class PrefsCounts(private val prefs: android.content.SharedPreferences, private val prefix: String) : AbstractMutableMap<String, Int>() {
     override fun put(key: String, value: Int): Int? = get(key).also { prefs.edit().putInt(prefix + key, value).apply() }
     override fun get(key: String): Int? = if (prefs.contains(prefix + key)) prefs.getInt(prefix + key, 0) else null

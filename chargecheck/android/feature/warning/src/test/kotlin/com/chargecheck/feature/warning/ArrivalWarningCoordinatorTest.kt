@@ -104,6 +104,18 @@ class ArrivalWarningCoordinatorTest {
     }
 
     @Test
+    fun `경고할 때 목적지가 잠깐 비어 있었어도 누를 때 경유지면 교체한다`() = runTest(UnconfinedTestDispatcher()) {
+        coordinator.start(backgroundScope)
+        // 경유지를 넣은 직후 내비가 경로를 다시 짜는 동안: 목적지 없이 경유지만 보인다
+        targets.value = listOf(red.target())
+        assertNull(assertNotNull(coordinator.warning.value).waypointIndex)
+        targets.value = listOf(red.target(), RouteTarget("서울특별시청", GeoPoint(37.5663, 126.9779), null))
+        coordinator.choose(VoiceIntent.SWITCH)
+        assertEquals(listOf<Pair<Int, String?>>(0 to green.id.value), replaced)
+        assertEquals(emptyList<RouteTarget>(), waypoints)
+    }
+
+    @Test
     fun `초록이면 경고하지 않고, 같은 목적지는 다시 조회하지 않는다`() = runTest(UnconfinedTestDispatcher()) {
         coordinator.start(backgroundScope)
         targets.value = listOf(green.target())
