@@ -71,6 +71,23 @@ data class MapStation(
 )
 
 /**
+ * 충전 중이 아닐 때 오른쪽 패널(첫 화면). 숫자·시각은 실제 데이터가 있을 때만 채운다.
+ * @param headline 목록 상태 한 줄(확인 중·받아 둔 정보·가져오지 못함). 정상이면 null.
+ * @param route 내비가 고른 충전소와 그 근거. 있으면 주변 요약보다 먼저 보인다.
+ * @param area 지금 지도에 보이는 지역의 판정 요약(전국이 아님).
+ * @param evidence 그 지역의 근거 종류(차량 배터리 변화 / 운영사 데이터).
+ * @param pending 서버가 아직 받지 않은 기록 안내.
+ */
+data class OverviewUi(
+    val headline: String? = null,
+    val route: String? = null,
+    val routeVerdict: Verdict? = null,
+    val area: String? = null,
+    val evidence: String? = null,
+    val pending: String? = null,
+)
+
+/**
  * real flavor 화면. 주차 중에는 왼쪽에 주변 충전소 지도(우리 판정 색 핀), 오른쪽에 세션 상태.
  * 핀을 누르면 상세 카드 → [여기로 안내]로 기본 내비에 목적지를 넘긴다.
  * 지도 위 검색 상자로 목적지를 고르면 [plan](가는 길의 충전소)을 받아 경로선과 오른쪽 [RoutePanel]을 보여준다.
@@ -116,6 +133,8 @@ fun StationMapScreen(
     /** 서버 연결이 끊겼을 때 등 한 줄 안내. */
     banner: String? = null,
     onSettings: (() -> Unit)? = null,
+    /** 충전 중이 아닐 때 큰 '대기' 대신 보여 줄 현재 정보와 근거. */
+    overview: OverviewUi? = null,
 ) {
     if (!parked) {
         DrivingScreen(state, warning, onWarningChoice, confirm, onConfirm, routeCard, onRouteCard)
@@ -150,6 +169,9 @@ fun StationMapScreen(
                 if (plan != null) {
                     RoutePanel(Modifier.weight(2f).fillMaxWidth(), plan, { onSelect(it) }, onRouteGo, onRouteClose)
                     SessionPanel(Modifier.weight(1f).fillMaxWidth(), state, engineOn = true, toast = toast, uploads = uploads)
+                } else if (state is SessionState.Idle && overview != null) {
+                    OverviewPanel(Modifier.weight(1f).fillMaxWidth(), overview, toast)
+                    if (devTools) LogPanel(Modifier.weight(1f).fillMaxWidth(), log)
                 } else {
                     SessionPanel(Modifier.weight(1f).fillMaxWidth(), state, engineOn = true, toast = toast, uploads = uploads)
                     // 판단 기록은 개발·시연 확인용. release에는 보이지 않는다
@@ -266,13 +288,49 @@ private fun dot(view: android.view.View, color: Int, sizeDp: Int) = GradientDraw
 }
 
 @Composable
+private fun OverviewPanel(modifier: Modifier, o: OverviewUi, toast: String?) {
+    PanelBox(modifier) {
+        Text("차지체크는 충전할 때 차 배터리가 실제로 올랐는지로 충전소를 확인해요", color = TextSub, fontSize = 18.sp)
+        Spacer(Modifier.height(16.dp))
+        o.headline?.let {
+            Text(it, color = TextMain, fontSize = 20.sp, modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Yellow.copy(alpha = 0.2f)).padding(12.dp))
+            Spacer(Modifier.height(16.dp))
+        }
+        o.route?.let {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(Modifier.width(18.dp).height(18.dp).clip(RoundedCornerShape(9.dp)).background((o.routeVerdict ?: Verdict.GRAY).color()))
+                Spacer(Modifier.width(12.dp))
+                Text(it, color = TextMain, fontSize = 24.sp, fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.height(20.dp))
+        }
+        o.area?.let {
+            Text(it, color = TextMain, fontSize = 20.sp)
+            Spacer(Modifier.height(8.dp))
+        }
+        o.evidence?.let {
+            Text(it, color = TextSub, fontSize = 18.sp)
+            Spacer(Modifier.height(8.dp))
+        }
+        Text("회색은 고장이 아니라 최근 실제 충전 확인 기록이 없다는 뜻이에요", color = TextSub, fontSize = 16.sp)
+        Spacer(Modifier.weight(1f))
+        if (toast != null) {
+            Text(toast, color = Green, fontSize = 20.sp)
+            Spacer(Modifier.height(8.dp))
+        }
+        o.pending?.let { Text(it, color = TextSub, fontSize = 18.sp) }
+        Text("충전소에 가면 충전 결과를 자동으로 기록해요", color = TextSub, fontSize = 16.sp)
+    }
+}
+
+@Composable
 private fun MapLegend(modifier: Modifier) {
     Row(
         modifier.clip(RoundedCornerShape(12.dp)).background(Panel).padding(horizontal = 14.dp, vertical = 10.dp),
         horizontalArrangement = Arrangement.spacedBy(14.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        listOf(Verdict.GREEN to "최근 정상", Verdict.YELLOW to "주의", Verdict.RED to "실패 많음", Verdict.GRAY to "기록 없음").forEach { (v, label) ->
+        listOf(Verdict.GREEN to "최근 정상", Verdict.YELLOW to "주의", Verdict.RED to "실패 많음", Verdict.GRAY to "확인 기록 없음").forEach { (v, label) ->
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.width(14.dp).height(14.dp).clip(RoundedCornerShape(7.dp)).background(v.color()))
                 Spacer(Modifier.width(6.dp))

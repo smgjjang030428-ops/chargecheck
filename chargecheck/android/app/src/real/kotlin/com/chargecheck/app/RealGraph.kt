@@ -102,6 +102,9 @@ internal class RealGraph private constructor(context: Context) {
     /** 서버에서 받은 주변 충전소와 판정. 지도·충전소 판별·글레오가 같이 쓴다. */
     val stations = MutableStateFlow<List<NearbyStation>>(emptyList())
 
+    /** 주변 충전소 목록을 어떻게 받았는지. 첫 화면이 로딩·정상·받아 둔 정보·실패를 구분해 보여 준다. */
+    val stationsLoad = MutableStateFlow<StationsLoad>(StationsLoad.Loading)
+
     /** 내비 목적지까지 가는 길의 충전소. 충전이 필요할 때만 채워진다(자동). */
     val plan = MutableStateFlow<RoutePlan?>(null)
 
@@ -165,10 +168,15 @@ internal class RealGraph private constructor(context: Context) {
     /** 내비 경로가 바뀔 때: 경유지 충전소를 알아보고(멀면 서버에서 받는다), 생기면 우리 경로 카드를 닫는다. */
     private suspend fun onRouteTargets(targets: List<RouteTarget>) {
         val waypoints = targets.dropLast(1)
-        val unknown = waypoints.filter { resolve(it) == null }
+        // 목적지도 본다: 차 주변 목록(최대 60곳)에 없는 먼 충전소 목적지는 못 알아봐서 경고가 안 떴다
+        val unknown = targets.filter { resolve(it) == null }
         if (unknown.isNotEmpty()) {
             val fetched = unknown.flatMap { t -> fetchRouteStations(t) }
-            if (fetched.isNotEmpty()) routeStations.value = (routeStations.value + fetched).distinctBy { it.id }.takeLast(200)
+            if (fetched.isNotEmpty()) {
+                routeStations.value = (routeStations.value + fetched).distinctBy { it.id }.takeLast(200)
+                // 새로 알아본 충전소(목적지 포함)를 검증한다. 같은 충전소는 경고 쪽에서 다시 조회하지 않는다
+                warning.onTargets(targets)
+            }
         }
         val station = stationWaypoint(targets) ?: run {
             if (waypoints.isNotEmpty()) {
@@ -219,6 +227,8 @@ internal class RealGraph private constructor(context: Context) {
         // 시동이 꺼져 프로세스가 죽었다 다시 켜졌으면 충전 전 잔량과 비교해 이어 간다
         scope.launch { session.restore() }
         warning.start(scope)
+        // [바꾸기] 결과(바꾸는 중·바뀜·확인 못 함)는 앱 화면이 안 보이면 내비 위 알림으로도
+        scope.launch { warning.swapStatus.collect { text -> if (text != null) notices.tryEmit(text) } }
         scope.launch {
             while (true) {
                 refreshStations()
@@ -256,9 +266,15 @@ internal class RealGraph private constructor(context: Context) {
             return
         }
         val car = navi.lastKnown()
-        val near = car?.let { api.nearbyWithStatus(it, 5_000).getOrNull() }.orEmpty()
-        val list = near.ifEmpty { api.nearbyWithStatus(DEFAULT_AREA, 5_000).getOrNull().orEmpty() }
+        val near = car?.let { api.nearbyWithStatus(it, 5_000) }
+        val r = near?.takeIf { it.getOrNull().orEmpty().isNotEmpty() } ?: api.nearbyWithStatus(DEFAULT_AREA, 5_000)
+        val list = r.getOrNull().orEmpty()
         if (list.isNotEmpty() || stations.value.isEmpty()) stations.value = list
+        stationsLoad.value = when {
+            r.isFailure && stations.value.isEmpty() -> StationsLoad.Failed
+            r.isFailure || api.nearbyFromCache -> StationsLoad.Cached(api.nearbyReceivedAt())
+            else -> StationsLoad.Fresh(api.nearbyReceivedAt() ?: Instant.now())
+        }
         recheckDestination()
     }
 
@@ -463,4 +479,12 @@ private class PrefsCounts(private val prefs: android.content.SharedPreferences, 
         get() = prefs.all.filterKeys { it.startsWith(prefix) }
             .mapNotNull { (k, v) -> (v as? Int)?.let { java.util.AbstractMap.SimpleEntry(k.removePrefix(prefix), it) } }
             .toMutableSet()
+}
+
+/** 주변 충전소 목록 상태. [Cached]·[Fresh]의 시각 = 서버에서 목록을 받은 시각(충전 근거 시각과 다르다). */
+sealed interface StationsLoad {
+    data object Loading : StationsLoad
+    data class Fresh(val receivedAt: Instant) : StationsLoad
+    data class Cached(val receivedAt: Instant?) : StationsLoad
+    data object Failed : StationsLoad
 }

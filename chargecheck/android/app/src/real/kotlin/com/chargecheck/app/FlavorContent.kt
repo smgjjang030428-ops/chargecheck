@@ -17,16 +17,21 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import com.chargecheck.core.model.GeoPoint
 import com.chargecheck.core.model.NearbyStation
+import com.chargecheck.core.model.ReasonCode
 import com.chargecheck.core.model.RoutePlan
+import com.chargecheck.core.model.StationStatus
+import com.chargecheck.core.model.Verdict
 import com.chargecheck.core.model.distanceMetersTo
 import com.chargecheck.core.port.RouteTarget
 import com.chargecheck.feature.session.SessionInput
 import com.chargecheck.feature.session.SessionState
 import com.chargecheck.feature.session.stationId
+import com.chargecheck.feature.warning.RouteCheck
 import com.chargecheck.feature.warning.distinctNames
 import com.chargecheck.feature.warning.reasonText
 import com.chargecheck.ui.ConsentScreen
 import com.chargecheck.ui.MapStation
+import com.chargecheck.ui.OverviewUi
 import com.chargecheck.ui.RouteCardUi
 import com.chargecheck.ui.SearchUi
 import com.chargecheck.ui.SettingItem
@@ -35,7 +40,10 @@ import com.chargecheck.ui.StationMapScreen
 import com.chargecheck.ui.WarningUi
 import kotlinx.coroutines.launch
 import org.json.JSONObject
+import java.time.Duration
 import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 /**
  * real flavor 화면. 상태는 [RealGraph](프로세스에 하나)가 갖고, 여기서는 화면에 그리고 버튼을 연결만 한다.
@@ -92,6 +100,9 @@ private fun RealContent(settings: AppSettings, onWithdraw: () -> Unit) {
     val car by remember { graph.navi.locations() }.collectAsState(initial = null)
     val confirm by graph.session.confirm.collectAsState()
     val uploads by graph.session.uploaded.collectAsState()
+    val load by graph.stationsLoad.collectAsState()
+    val routeCheck by graph.warning.routeCheck.collectAsState()
+    val swapStatus by graph.warning.swapStatus.collectAsState()
 
     // 경로 카드가 열려 있으면 경로 근처 충전소를, 아니면 주변 충전소를 지도에 찍는다
     val shown = plan?.let { p -> p.candidates.map { c -> c.stop.toMap(highlight = c.stop.station.id == p.recommendedId) } }
@@ -207,11 +218,13 @@ private fun RealContent(settings: AppSettings, onWithdraw: () -> Unit) {
                 emptyList()
             },
             banner = when {
+                swapStatus != null -> swapStatus
                 !online && pending > 0 -> "서버 연결 안 됨 · 기록 ${pending}건은 모아 두었다가 보내요"
                 !online -> "서버 연결 안 됨 · 마지막으로 받은 충전소 정보예요"
                 else -> null
             },
             onSettings = { showSettings = true },
+            overview = overviewUi(load, routeCheck, stations, pending),
         )
         if (showSettings && parked) {
             // settingsVersion: 스위치를 바꾸면 다시 그리기 위한 값
@@ -219,7 +232,11 @@ private fun RealContent(settings: AppSettings, onWithdraw: () -> Unit) {
                 SettingsSheet(
                     items = listOf(
                         SettingItem("가는 길 충전소", "내비 목적지까지 충전이 필요할 때만 알려줘요", settings.routeCards) { settings.routeCards = it; settingsVersion++ },
-                        SettingItem("도착 전 경고", "가는 충전소에 최근 실패 기록이 있으면 알려줘요", settings.arrivalWarning) { settings.arrivalWarning = it; settingsVersion++ },
+                        SettingItem("도착 전 경고", "가는 충전소에 최근 실패 기록이 있으면 알려줘요", settings.arrivalWarning) {
+                            settings.arrivalWarning = it
+                            settingsVersion++
+                            if (it) scope.launch { graph.warning.recheck() }
+                        },
                         SettingItem("내비 위 알림 카드", "차지체크 화면이 안 보일 때 카드를 알림으로 띄워요", settings.overlayCards) { settings.overlayCards = it; settingsVersion++ },
                     ),
                     pending = pending,
@@ -235,6 +252,51 @@ private fun NearbyStation.toMap(highlight: Boolean = false): MapStation {
     val reason = status.message.ifBlank { reasonText(status.reasonCode) } + (status.notice?.let { " · $it" } ?: "")
     return MapStation(station.id.value, station.name, station.location, status.verdict, reason, info, status.chargers, highlight)
 }
+
+/** 충전 중이 아닐 때 첫 화면 패널. 숫자는 받은 목록에서만 센다(지도에 보이는 지역, 전국 아님). */
+private fun overviewUi(load: StationsLoad, check: RouteCheck?, stations: List<NearbyStation>, pending: Int): OverviewUi {
+    val headline = when (load) {
+        StationsLoad.Loading -> "충전소 정보를 확인하고 있어요"
+        StationsLoad.Failed -> "충전소 정보를 가져오지 못했어요 · 30초마다 다시 시도해요"
+        is StationsLoad.Cached -> "최근 받아 둔 정보예요" + (load.receivedAt?.let { " · 마지막 수신 ${HHMM.format(it)}" } ?: "")
+        is StationsLoad.Fresh -> null
+    }
+    val route = check?.let { c ->
+        c.status?.let { "내비가 고른 ${c.station.name} · ${evidenceText(it)}" } ?: "내비가 고른 ${c.station.name}을(를) 확인하고 있어요"
+    }
+    val count = stations.groupingBy { it.status.verdict }.eachCount()
+    val area = stations.takeIf { it.isNotEmpty() }?.let {
+        "지도에 보이는 충전소 ${it.size}곳 · 최근 정상 ${count[Verdict.GREEN] ?: 0} · 주의 ${count[Verdict.YELLOW] ?: 0} · " +
+            "실패 많음 ${count[Verdict.RED] ?: 0} · 확인 기록 없음 ${count[Verdict.GRAY] ?: 0}"
+    }
+    val byCar = stations.count { it.status.reasonCode == ReasonCode.RECENT_SUCCESS }
+    val byOperator = stations.count { it.status.reasonCode == ReasonCode.PUBLIC_CHARGING }
+    val evidence = when {
+        stations.isEmpty() -> null
+        byCar + byOperator == 0 -> "최근 3시간 안에 실제 충전이 확인된 곳은 아직 없어요"
+        else -> "차량 배터리 변화로 충전 확인 ${byCar}곳 · 운영사 데이터로 충전 중 확인 ${byOperator}곳"
+    }
+    return OverviewUi(
+        headline = headline,
+        route = route,
+        routeVerdict = check?.status?.verdict,
+        area = area,
+        evidence = evidence,
+        pending = if (pending > 0) "전송 대기 ${pending}건 · 연결되면 다시 보내요" else null,
+    )
+}
+
+/** 판정의 근거 한 줄. 차량 근거와 운영사 근거를 나누고, 시각은 근거가 생긴 시각(서버에서 받은 시각 아님). */
+private fun evidenceText(s: StationStatus): String {
+    val ago = s.lastSuccessAt?.let { " · ${Duration.between(it, Instant.now()).toMinutes().coerceAtLeast(0)}분 전" }.orEmpty()
+    return when (s.reasonCode) {
+        ReasonCode.RECENT_SUCCESS -> "차량 배터리 변화로 충전 확인$ago"
+        ReasonCode.PUBLIC_CHARGING -> "운영사 데이터에서 충전 중 확인$ago"
+        else -> s.message.ifBlank { reasonText(s.reasonCode) }
+    }
+}
+
+private val HHMM = DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneId.of("Asia/Seoul"))
 
 /** 주행 중 15초 카드: "가는 길에 충전이 필요해요" + 추천 충전소 한 줄. */
 private fun RoutePlan.toCard(): RouteCardUi {

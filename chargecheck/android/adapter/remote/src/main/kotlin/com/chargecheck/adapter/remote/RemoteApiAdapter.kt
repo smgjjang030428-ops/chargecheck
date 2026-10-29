@@ -41,20 +41,46 @@ interface KeyValueStore {
     fun put(key: String, value: String?)
 }
 
+/** 서버가 오류 코드로 답했다. [code]로 다시 보낼지 정한다. [retryAfterSec] = 429·503의 Retry-After(초). */
+class HttpStatusException(val code: Int, val retryAfterSec: Long?, message: String) : IllegalStateException(message)
+
+/** 서버가 2xx로 답했는데 받았는지(accepted)를 읽을 수 없다. 받았을 수도 있어 같은 eventId로 다시 보낸다. */
+class UnclearResponseException(message: String) : IllegalStateException(message)
+
+/** 보낸 결과에 따라 대기열에서 할 일. */
+internal enum class SendOutcome { ACCEPTED, DUPLICATE, RETRY, HOLD_AUTH, REJECTED, UNCLEAR }
+
+internal fun outcomeOf(r: Result<Unit>): SendOutcome {
+    val e = r.exceptionOrNull() ?: return SendOutcome.ACCEPTED
+    return when {
+        e is DuplicateEventException -> SendOutcome.DUPLICATE
+        e is IOException -> SendOutcome.RETRY
+        e is UnclearResponseException -> SendOutcome.UNCLEAR
+        e is HttpStatusException && (e.code == 408 || e.code == 429 || e.code >= 500) -> SendOutcome.RETRY
+        e is HttpStatusException && (e.code == 401 || e.code == 403) -> SendOutcome.HOLD_AUTH
+        e is HttpStatusException -> SendOutcome.REJECTED
+        else -> SendOutcome.UNCLEAR
+    }
+}
+
 /**
  * ChargeCheck 서버 REST API (기획문서/차지체크_앱_구동_기획.md §10).
  * 의존성을 늘리지 않으려고 HttpURLConnection + org.json(안드로이드 내장)으로 썼다.
  *
- * 오프라인(기획 §14): 연결이 안 돼 못 보낸 충전 기록은 [store]에 모아 두었다가 [flushOutbox]로 보내고,
- * 주변 충전소는 마지막으로 받은 목록을 대신 보여준다. 연결 상태는 [online].
+ * 오프라인(기획 §14): 서버에 닿지 못했거나 서버가 잠깐 오류를 낸 충전 기록은 [store]에 모아 두었다가 [flushOutbox]로
+ * 같은 eventId 그대로 다시 보낸다. 서버는 같은 eventId를 두 번 저장하지 않는다. 주변 충전소는 마지막으로 받은 목록을
+ * 대신 보여준다. 연결 상태는 [online].
  *
  * @param baseUrl 에뮬레이터에서 개발 PC의 서버는 "http://10.0.2.2:8000".
+ * @param transport 테스트에서 HTTP 대신 쓴다. (method, path, body) → 응답 본문 또는 [HttpStatusException]·IOException.
  */
 class RemoteApiAdapter(
     private val baseUrl: String,
     private val deviceId: DeviceId,
     private val appVersion: String = "0.1.0",
     private val store: KeyValueStore? = null,
+    private val now: () -> Long = System::currentTimeMillis,
+    private val transport: (suspend (String, String, JSONObject?) -> Result<String>)? = null,
 ) : ChargeCheckApiPort {
 
     private val _online = MutableStateFlow(true)
@@ -64,40 +90,80 @@ class RemoteApiAdapter(
 
     private val outboxLock = Mutex()
 
-    /** 아직 못 보낸 충전 기록 수. */
-    fun pendingCount(): Int = outbox().size
+    /** 아직 서버가 받지 않은 충전 기록 수(다시 보낼 것 + 인증 문제로 멈춘 것). 서버가 거절한 기록은 세지 않는다. */
+    fun pendingCount(): Int = outbox().count { it.state != STATE_REJECTED }
 
+    /** 서버가 요청 형식 오류(400·404·422 등)로 거절해 더 보내지 않는 기록 수. 지우지 않고 남겨 둔다. */
+    fun rejectedCount(): Int = outbox().count { it.state == STATE_REJECTED }
+
+    /** 성공 = 서버가 새 기록으로 받음. 실패해도 다시 보낼 수 있는 기록은 대기열에 남는다. */
     override suspend fun postEvent(event: ChargeEvent): Result<Unit> {
         val body = eventJson(event)
         val r = sendEvent(body)
-        if (r.exceptionOrNull() is IOException) outboxLock.withLock { saveOutbox(outbox() + body.toString()) }
+        val outcome = outcomeOf(r)
+        if (outcome != SendOutcome.ACCEPTED && outcome != SendOutcome.DUPLICATE) {
+            outboxLock.withLock {
+                val items = outbox()
+                if (items.none { it.eventId == event.eventId }) saveOutbox(items + after(Pending(body), outcome, r))
+            }
+        }
         return r
     }
 
-    /** 모아 둔 기록을 보낸다. 서버가 받았거나(중복 포함) 형식 오류로 거절한 건 지운다. 보낸 건수를 돌려준다. */
+    /** 모아 둔 기록 중 보낼 때가 된 것을 보낸다. 서버가 받았거나 중복이라 답한 것만 지운다. 새로 받아 준 건수를 돌려준다. */
     suspend fun flushOutbox(): Int = outboxLock.withLock {
-        val left = mutableListOf<String>()
         var sent = 0
-        for (item in outbox()) {
-            val r = sendEvent(JSONObject(item))
-            when {
-                r.isSuccess -> sent++
-                r.exceptionOrNull() is IOException -> left += item
-                else -> Unit
+        val left = outbox().mapNotNull { item ->
+            if (item.state == STATE_REJECTED || item.nextAt > now()) return@mapNotNull item
+            val r = sendEvent(item.body)
+            when (val outcome = outcomeOf(r)) {
+                SendOutcome.ACCEPTED -> { sent++; null }
+                SendOutcome.DUPLICATE -> null
+                else -> after(item, outcome, r)
             }
         }
         saveOutbox(left)
         sent
     }
 
-    private suspend fun sendEvent(body: JSONObject): Result<Unit> = call("POST", "/v1/events", body).mapCatching { text ->
-        // 같은 기기·충전소 2시간 안 기록은 200 {"accepted": false}로 온다
-        if (text.isNotBlank() && !JSONObject(text).optBoolean("accepted", true)) throw DuplicateEventException()
+    /** 보내지 못한 기록의 다음 상태. eventId·발생 시각·결과(body)는 그대로 둔다. */
+    private fun after(item: Pending, outcome: SendOutcome, r: Result<Unit>): Pending {
+        val attempts = item.attempts + 1
+        val retryAfter = (r.exceptionOrNull() as? HttpStatusException)?.retryAfterSec?.takeIf { it > 0 }
+        return when {
+            outcome == SendOutcome.REJECTED -> item.copy(attempts = attempts, state = STATE_REJECTED)
+            outcome == SendOutcome.HOLD_AUTH || (outcome == SendOutcome.UNCLEAR && attempts >= MAX_UNCLEAR_ATTEMPTS) ->
+                item.copy(attempts = attempts, state = STATE_HELD, nextAt = now() + HOLD_MS)
+            else -> item.copy(attempts = attempts, state = STATE_PENDING, nextAt = now() + (retryAfter?.times(1_000) ?: 0))
+        }
     }
 
-    private fun outbox(): List<String> = store?.get(OUTBOX)?.let { JSONArray(it) }?.let { a -> (0 until a.length()).map { a.getString(it) } }.orEmpty()
+    private suspend fun sendEvent(body: JSONObject): Result<Unit> = call("POST", "/v1/events", body).mapCatching { text ->
+        // 받음 = {"accepted": true}, 같은 eventId·같은 기기·충전소 2시간 안 기록 = {"accepted": false, "reason": "DUPLICATE"}
+        val o = runCatching { JSONObject(text) }.getOrNull()
+        if (o == null || !o.has("accepted")) throw UnclearResponseException("accepted 없음: ${text.take(80)}")
+        if (!o.optBoolean("accepted")) throw DuplicateEventException()
+    }
 
-    private fun saveOutbox(items: List<String>) = store?.put(OUTBOX, if (items.isEmpty()) null else JSONArray(items).toString())
+    /** 대기열 한 건. 예전 형식(본문 문자열만)도 읽는다. */
+    private data class Pending(val body: JSONObject, val attempts: Int = 0, val nextAt: Long = 0, val state: String = STATE_PENDING) {
+        val eventId: String get() = body.optString("eventId")
+        fun toJson(): JSONObject = JSONObject().put("body", body).put("attempts", attempts).put("nextAt", nextAt).put("state", state)
+    }
+
+    private fun outbox(): List<Pending> {
+        val a = store?.get(OUTBOX)?.let { runCatching { JSONArray(it) }.getOrNull() } ?: return emptyList()
+        return (0 until a.length()).mapNotNull { i ->
+            when (val v = a.get(i)) {
+                is JSONObject -> Pending(v.getJSONObject("body"), v.optInt("attempts"), v.optLong("nextAt"), v.optString("state", STATE_PENDING))
+                is String -> runCatching { Pending(JSONObject(v)) }.getOrNull()
+                else -> null
+            }
+        }
+    }
+
+    private fun saveOutbox(items: List<Pending>) =
+        store?.put(OUTBOX, if (items.isEmpty()) null else JSONArray(items.map { it.toJson() }).toString())
 
     private fun eventJson(event: ChargeEvent) = JSONObject().apply {
         put("eventId", event.eventId)
@@ -129,11 +195,25 @@ class RemoteApiAdapter(
             JSONArray(body).objects().map { station(it) }
         }
 
-    /** 주변 충전소와 상세 정보·판정을 한 번에(지도 화면용). 연결이 안 되면 마지막으로 받은 목록. */
+    /** 마지막 [nearbyWithStatus]가 서버 응답 대신 저장해 둔 목록을 돌려줬는지. */
+    @Volatile
+    var nearbyFromCache: Boolean = false
+        private set
+
+    /** 주변 충전소 목록을 서버에서 마지막으로 받은 시각. */
+    fun nearbyReceivedAt(): Instant? = store?.get(NEARBY_CACHE_AT)?.toLongOrNull()?.let(Instant::ofEpochMilli)
+
+    /** 주변 충전소와 상세 정보·판정을 한 번에(지도 화면용). 서버에 닿지 못했거나 서버 오류면 마지막으로 받은 목록. */
     suspend fun nearbyWithStatus(at: GeoPoint, radiusM: Int): Result<List<NearbyStation>> {
         val r = call("GET", "/v1/stations/nearby?lat=${at.lat}&lon=${at.lon}&radius=$radiusM")
-        r.getOrNull()?.let { body -> store?.put(NEARBY_CACHE, body) }
-        val body = r.getOrNull() ?: store?.get(NEARBY_CACHE)?.takeIf { r.exceptionOrNull() is IOException }
+        r.getOrNull()?.let { body ->
+            store?.put(NEARBY_CACHE, body)
+            store?.put(NEARBY_CACHE_AT, now().toString())
+        }
+        val e = r.exceptionOrNull()
+        val serverDown = e is IOException || (e is HttpStatusException && e.code >= 500)
+        nearbyFromCache = r.isFailure
+        val body = r.getOrNull() ?: store?.get(NEARBY_CACHE)?.takeIf { serverDown }
             ?: return Result.failure(r.exceptionOrNull() ?: IOException("no data"))
         return runCatching { JSONArray(body).objects().map { NearbyStation(station(it), info(it), status(it.getJSONObject("status"))) } }
     }
@@ -195,7 +275,10 @@ class RemoteApiAdapter(
     override suspend fun postReview(stationId: StationId, tags: List<ReviewTag>): Result<Unit> =
         call("POST", "/v1/reviews", JSONObject().put("stationId", stationId.value).put("tags", JSONArray(tags.map { it.name }))).map { }
 
-    private suspend fun call(method: String, path: String, body: JSONObject? = null): Result<String> = withContext(Dispatchers.IO) {
+    private suspend fun call(method: String, path: String, body: JSONObject? = null): Result<String> =
+        transport?.invoke(method, path, body) ?: http(method, path, body)
+
+    private suspend fun http(method: String, path: String, body: JSONObject?): Result<String> = withContext(Dispatchers.IO) {
         runCatching {
             val conn = (URL(baseUrl + path).openConnection() as HttpURLConnection).apply {
                 requestMethod = method
@@ -224,7 +307,7 @@ class RemoteApiAdapter(
                 }
                 _online.value = true
                 val text = (if (code < 400) conn.inputStream else conn.errorStream)?.bufferedReader()?.use { it.readText() }.orEmpty()
-                check(code < 400) { "HTTP $code $method $path: $text" }
+                if (code >= 400) throw HttpStatusException(code, conn.getHeaderField("Retry-After")?.trim()?.toLongOrNull(), "HTTP $code $method $path: $text")
                 text
             } finally {
                 conn.disconnect()
@@ -237,6 +320,14 @@ class RemoteApiAdapter(
     private companion object {
         const val OUTBOX = "outbox_events"
         const val NEARBY_CACHE = "nearby_cache"
+        const val NEARBY_CACHE_AT = "nearby_cache_at"
+        const val STATE_PENDING = "PENDING"
+        /** 인증 오류(401·403)나 응답을 계속 못 읽어 잠시 멈춤. [HOLD_MS] 뒤 다시 보낸다. */
+        const val STATE_HELD = "HELD"
+        /** 요청 형식 오류로 서버가 거절. 다시 보내지 않지만 지우지도 않는다. */
+        const val STATE_REJECTED = "REJECTED"
+        const val HOLD_MS = 60 * 60 * 1_000L
+        const val MAX_UNCLEAR_ATTEMPTS = 5
     }
 }
 

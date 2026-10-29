@@ -227,7 +227,8 @@ internal fun SessionPanel(modifier: Modifier, state: SessionState, engineOn: Boo
             Text(toast, color = Green, fontSize = 20.sp)
             Spacer(Modifier.height(12.dp))
         }
-        Text("서버로 보낸 기록 ${uploads.size}건", color = TextSub, fontSize = 18.sp)
+        // 이번 실행에서 서버가 새로 받은 기록만 센다(누적 아님). 대기 중인 기록은 화면 위 배너에 따로
+        if (uploads.isNotEmpty()) Text("이번 실행에서 서버가 받은 기록 ${uploads.size}건", color = TextSub, fontSize = 18.sp)
         uploads.takeLast(3).forEach { e ->
             val color = if (e.result == ChargeResult.SUCCESS) Green else Red
             Text(

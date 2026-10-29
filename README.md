@@ -13,7 +13,7 @@
 | --- | --- |
 | F1 자동 정상 기록 | SOC 상승으로 충전 성공을 자동 기록 (실시간 LIVE / 재시동 시 비교 RETRO) |
 | F2 고장 확인 후 기록 | SOC가 오르지 않으면 운전자에게 한 번 묻고(버튼 또는 글레오 음성), "응"일 때만 실패로 기록 |
-| F3 도착 전 경고 | 목적지·경유지 충전소가 고장 의심이면 내비 위에 카드로 알리고, **바꾸기**를 누르면 그 자리를 대체 충전소로 교체 (목적지는 그대로) |
+| F3 도착 전 경고 | 목적지·경유지 충전소가 고장 의심이면 내비 위에 카드로 알리고, **바꾸기**를 누르면 그 충전소 자리만 대체 충전소로 교체(경유지면 그 경유지, 목적지면 목적지. 나머지 경로·순서는 그대로). 내비에 실제로 반영됐는지 확인한 뒤 "바뀌었어요"를 알림. 판정 조회가 실패하면 5→15→30→60초 간격으로 다시 조회 |
 | F4 태그 평가 | 주차 중에만, 충전 후 태그로 간단 평가 (선택) |
 | 운영사 알림 | 고장 의심이 생기면 운영사 리포트에 올리고, 이후 성공 기록이 오면 자동 해제 |
 
@@ -52,7 +52,7 @@ git clone https://github.com/smgjjang030428-ops/chargecheck.git
 cd chargecheck/chargecheck/android
 
 # 단위 테스트 (충전 판단, 도착 전 경고)
-./gradlew :feature:session:test :feature:warning:testDebugUnitTest
+./gradlew :feature:session:test :feature:warning:testDebugUnitTest :adapter:remote:testDebugUnitTest
 
 # 실차·에뮬레이터용 앱 (Pleos SDK 사용, 배포 서버 접속)
 ./gradlew assembleRealRelease
@@ -124,9 +124,10 @@ copy .env.example .env      # PUBLIC_API_KEY에 본인 공공데이터 키를 �
 | 대상 | 결과 |
 | --- | --- |
 | 충전 판단 `ChargeSessionMachine`·`SessionCoordinator` | ✅ 70개 통과 |
-| 도착 전 경고 `ArrivalWarningCoordinator`·`RouteAdvice`·`DistinctNames` | ✅ 17개 통과 |
+| 도착 전 경고 `ArrivalWarningCoordinator`·`RouteAdvice`·`DistinctNames` | ✅ 29개 통과 |
+| 기록 전송 대기열 `RemoteApiAdapter` (서버 오류·연결 끊김·429·401·422 처리) | ✅ 9개 통과 |
 | 서버 판정·API·공공 동기화·경로 (pytest) | ✅ 64개 통과 |
-| 에뮬레이터 확인 | ✅ 내비 위 경고 카드, 경유지 교체(목적지 유지), 대체 충전소 이름 구분 |
+| 에뮬레이터 확인 | ✅ 내비 위 경고 카드, 경유지 교체(목적지 유지, 10/28), 목적지 교체와 반영 확인 알림(10/29), 대체 충전소 이름 구분, 첫 화면 판정 요약 |
 | 배포 서버 | ✅ 상태 확인, 주변 충전소 조회, 운영사 API 키 없이 차단(401) |
 
 > ⚠️ 프로젝트 경로에 한글이 있으면 Windows에서 Gradle 테스트가 실행되지 않습니다. 영문 경로에 clone하세요.

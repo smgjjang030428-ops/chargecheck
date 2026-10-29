@@ -47,6 +47,12 @@ interface NaviPort {
     suspend fun replaceWaypoint(index: Int, target: RouteTarget): Result<Unit> = addWaypoint(target)
     /** 기본 내비에 목적지를 넘겨 길안내를 시작한다(지도 화면의 [여기로 안내]). Pleos: NaviHelper.requestRoute */
     suspend fun setDestination(target: RouteTarget): Result<Unit>
+    /**
+     * 목적지만 [target]으로 바꾸고 [waypoints]를 같은 순서로 유지한다. 경유지는 좌표가 있어야 한다.
+     * 기본 구현은 경유지가 없을 때만 [setDestination], 있으면 지원하지 않음. Pleos: requestRouteWithWaypoints
+     */
+    suspend fun replaceDestination(target: RouteTarget, waypoints: List<RouteTarget>): Result<Unit> =
+        if (waypoints.isEmpty()) setDestination(target) else Result.failure(UnsupportedOperationException("경유지 유지 미지원"))
     /** 지금 목적지(경유지 제외). 없으면 null. 기본 구현은 routeTargets의 마지막(목적지가 맨 뒤). */
     fun destination(): Flow<RouteTarget?> = routeTargets().map { it.lastOrNull() }
     /** 기본 내비의 장소 검색 화면을 검색어와 함께 연다. Pleos: requestNavigationScreen(SearchPlace) */

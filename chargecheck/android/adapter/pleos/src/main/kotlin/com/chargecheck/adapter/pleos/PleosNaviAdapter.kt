@@ -134,9 +134,7 @@ class PleosNaviAdapter(context: Context) : NaviPort, LocationPort {
     override fun arrivals(): Flow<RouteTarget> = arrived
 
     override suspend fun addWaypoint(target: RouteTarget): Result<Unit> = runCatching {
-        navi.addWaypoint(
-            RequestWaypointInfo(target.location.lat, target.location.lon, target.name, WaypointIndex.FIRST, target.poiId ?: "", "", "", ""),
-        )
+        navi.addWaypoint(waypointInfo(target, 0))
     }
 
     /**
@@ -149,23 +147,31 @@ class PleosNaviAdapter(context: Context) : NaviPort, LocationPort {
         val list = waypoints.toMutableList().apply { if (index in indices) set(index, target) else add(target) }
             .filter { it === target || it.location.lat != 0.0 || it.location.lon != 0.0 }
             .take(2)
-        val requests = list.mapIndexed { i, w ->
-            RequestWaypointInfo(w.location.lat, w.location.lon, w.name, if (i == 0) WaypointIndex.FIRST else WaypointIndex.SECOND, w.poiId ?: "", "", "", "")
-        }
         Log.d(TAG, "경유지 교체 요청: ${list.joinToString { it.name }} → ${dest.name}")
-        navi.requestRouteWithWaypoints(
-            RouteWithWaypointsRequest(
-                RouteInfo(dest.location.lat, dest.location.lon, null, null, dest.name, dest.poiId ?: "", "", "", RouteOption.RECOMMENDED, "", false),
-                requests,
-            ),
-        )
+        navi.requestRouteWithWaypoints(RouteWithWaypointsRequest(routeInfo(dest), list.mapIndexed { i, w -> waypointInfo(w, i) }))
+    }
+
+    /** 목적지 교체. 경유지가 있으면 목적지와 경유지 목록을 requestRouteWithWaypoints 한 번으로 보낸다(경유지 교체와 같은 이유). */
+    override suspend fun replaceDestination(target: RouteTarget, waypoints: List<RouteTarget>): Result<Unit> {
+        if (waypoints.isEmpty()) return setDestination(target)
+        return runCatching {
+            require(waypoints.size <= 2) { "경유지는 최대 2개" }
+            require(waypoints.none { it.location.lat == 0.0 && it.location.lon == 0.0 }) { "좌표 없는 경유지" }
+            Log.d(TAG, "목적지 교체 요청: ${waypoints.joinToString { it.name }} → ${target.name}")
+            navi.requestRouteWithWaypoints(RouteWithWaypointsRequest(routeInfo(target), waypoints.mapIndexed { i, w -> waypointInfo(w, i) }))
+        }
     }
 
     override suspend fun setDestination(target: RouteTarget): Result<Unit> = runCatching {
-        navi.requestRoute(
-            RouteInfo(target.location.lat, target.location.lon, null, null, target.name, target.poiId ?: "", "", "", RouteOption.RECOMMENDED, "", false),
-        )
+        navi.requestRoute(routeInfo(target))
     }
+
+    private fun routeInfo(t: RouteTarget) =
+        RouteInfo(t.location.lat, t.location.lon, null, null, t.name, t.poiId ?: "", "", "", RouteOption.RECOMMENDED, "", false)
+
+    /** [i]번째(0부터) 경유지 요청. 내비 경유지는 최대 2개. */
+    private fun waypointInfo(t: RouteTarget, i: Int) =
+        RequestWaypointInfo(t.location.lat, t.location.lon, t.name, if (i == 0) WaypointIndex.FIRST else WaypointIndex.SECOND, t.poiId ?: "", "", "", "")
 
     override fun destination(): Flow<RouteTarget?> = targets.map { destination }.distinctUntilChanged()
 
