@@ -34,7 +34,7 @@
 3. 직접 넣어야 하는 값 두 개를 붙여넣는다.
    - `DATABASE_URL`: 1단계의 Neon 주소
    - `PUBLIC_API_KEY`: 공공데이터포털 일반 인증키(로컬 `.env`의 값)
-4. **Apply**. 빌드가 끝나면 `https://chargecheck.onrender.com`(이름이 겹치면 뒤에 글자가 붙는다) 같은 주소가 생긴다.
+4. **Apply**. 빌드가 끝나면 `https://chargecheck-ap2h.onrender.com` 주소가 생겼다(`chargecheck.onrender.com`은 다른 서비스가 이미 쓰고 있어 Render가 뒤에 글자를 붙였다).
 5. 확인: 주소 뒤에 `/healthz` → `{"ok":true}`, `/docs` → API 목록.
 
 `DEVICE_SALT`, `OPERATOR_KEY`는 Render가 임의 값으로 만든다. 서비스의 **Environment** 탭에서 `OPERATOR_KEY` 값을 보고, 운영사 화면은 `https://주소/operator?key=그_값` 으로 연다.
@@ -44,12 +44,12 @@
 잠들면 공공 데이터 5분 동기화와 운영사 알림 자동 해제도 멈춘다. 저장소가 비공개라 GitHub Actions로 깨우면 무료 시간(월 2,000분)을 넘으므로 외부 무료 서비스를 쓴다.
 
 1. https://uptimerobot.com 에 가입한다.
-2. **New monitor** → 종류 **HTTP(s)**, 주소 `https://chargecheck.onrender.com/healthz`(3단계의 실제 주소), 간격 **5분**.
+2. **New monitor** → 종류 **HTTP(s)**, 주소 `https://chargecheck-ap2h.onrender.com/healthz`, 간격 **5분**.
 3. 저장하면 상태가 **Up**으로 바뀌는지 본다. 서버가 멈추면 메일로도 알려 준다.
 
 ## 5. 앱이 배포 서버를 보게 하기
 
-release 빌드는 `https://chargecheck.onrender.com`을 쓴다. 실제 주소가 다르면 `chargecheck/android/local.properties`에 한 줄 추가한다(이 파일은 커밋되지 않는다).
+release 빌드는 `https://chargecheck-ap2h.onrender.com`을 쓴다. 다른 서버를 쓰려면 `chargecheck/android/local.properties`에 한 줄 추가한다(이 파일은 커밋되지 않는다).
 
 ```properties
 chargecheck.serverUrl=https://실제-주소.onrender.com

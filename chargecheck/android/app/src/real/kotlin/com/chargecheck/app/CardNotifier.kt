@@ -12,6 +12,7 @@ import com.chargecheck.core.model.Verdict
 import com.chargecheck.core.port.VoiceIntent
 import com.chargecheck.feature.session.ChargeSessionMachine
 import com.chargecheck.feature.session.stationId
+import com.chargecheck.feature.warning.distinctNames
 import com.chargecheck.ui.withRo
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
@@ -43,13 +44,15 @@ internal class CardNotifier(private val context: Context, private val graph: Rea
         show(ID_WARNING, combine(graph.warning.warning, visible, parked) { w, fg, isParked ->
             w?.takeUnless { fg }?.let { warn ->
                 val alt = warn.alternative
+                // 두 이름이 똑같이 잘리지 않게 함께 줄인다("경기성남 SW…" → "SW드림타운 2"/"SW드림타운 1")
+                val (stationName, altName) = alt?.let { distinctNames(warn.station.name, it.name, 10, 8) } ?: (short(warn.station.name, 10) to null)
                 // "○○ 실패 많음 → △△ 2시간 전 충전" — 대안에도 실제 충전 근거를 붙인다
-                val altText = alt?.let { a -> " → ${short(a.name, 8)}" + (warn.alternativeStatus?.let { " ${shortReason(it)}" } ?: "") }.orEmpty()
+                val altText = altName?.let { a -> " → $a" + (warn.alternativeStatus?.let { " ${shortReason(it)}" } ?: "") }.orEmpty()
                 Card(
                     "가는 충전소에 실패 기록",
-                    "${short(warn.station.name, 10)} ${shortReason(warn.status)}$altText",
+                    "$stationName ${shortReason(warn.status)}$altText",
                     listOfNotNull(
-                        alt?.let { "${short(it.name, 8).withRo()} 바꾸기" to "${KIND_WARNING}:${VoiceIntent.SWITCH}" },
+                        altName?.let { "${it.withRo()} 바꾸기" to "${KIND_WARNING}:${VoiceIntent.SWITCH}" },
                         "그대로" to "${KIND_WARNING}:${VoiceIntent.KEEP}",
                     ),
                     timeoutMs = if (isParked) 0 else WARNING_MS,

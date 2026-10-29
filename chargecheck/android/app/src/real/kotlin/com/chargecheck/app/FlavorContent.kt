@@ -23,6 +23,7 @@ import com.chargecheck.core.port.RouteTarget
 import com.chargecheck.feature.session.SessionInput
 import com.chargecheck.feature.session.SessionState
 import com.chargecheck.feature.session.stationId
+import com.chargecheck.feature.warning.distinctNames
 import com.chargecheck.feature.warning.reasonText
 import com.chargecheck.ui.ConsentScreen
 import com.chargecheck.ui.MapStation
@@ -104,7 +105,7 @@ private fun RealContent(settings: AppSettings, onWithdraw: () -> Unit) {
             parked = parked,
             state = state,
             question = question,
-            warning = warning?.let { WarningUi(it.station.name, it.status.verdict, it.reasonText, it.alternative?.name) },
+            warning = warning?.let { it.alternative?.let { a -> distinctNames(it.station.name, a.name) }.let { names -> WarningUi(names?.first ?: it.station.name, it.status.verdict, it.reasonText, names?.second) } },
             toast = toast,
             log = log,
             uploads = uploads,

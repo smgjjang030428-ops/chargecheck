@@ -3,7 +3,9 @@ import java.util.Properties
 
 // 배포 서버 주소. local.properties 의 chargecheck.serverUrl 로 바꿀 수 있다(배포 후 Render 주소).
 val localProps = Properties().apply { rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use(::load) }
-val releaseServer = localProps.getProperty("chargecheck.serverUrl") ?: "https://chargecheck.onrender.com"
+val releaseServer = localProps.getProperty("chargecheck.serverUrl") ?: "https://chargecheck-ap2h.onrender.com"
+// release 서명 키. 키 파일 위치와 비밀번호는 local.properties 에만 둔다. 없으면 서명되지 않은 release가 만들어진다.
+val releaseKeystore = localProps.getProperty("chargecheck.keystore")?.let(::file)?.takeIf { it.exists() }
 
 plugins {
     alias(libs.plugins.android.application)
@@ -23,10 +25,24 @@ android {
         versionName = "0.1.0"
     }
 
+    signingConfigs {
+        if (releaseKeystore != null) {
+            create("release") {
+                storeFile = releaseKeystore
+                storePassword = localProps.getProperty("chargecheck.keystorePassword")
+                keyAlias = localProps.getProperty("chargecheck.keyAlias")
+                keyPassword = localProps.getProperty("chargecheck.keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         // debug = 에뮬레이터에서 개발 PC 서버(10.0.2.2 = PC의 127.0.0.1), release = 배포 서버(HTTPS)
         getByName("debug") { buildConfigField("String", "SERVER_URL", "\"http://10.0.2.2:8000\"") }
-        getByName("release") { buildConfigField("String", "SERVER_URL", "\"$releaseServer\"") }
+        getByName("release") {
+            buildConfigField("String", "SERVER_URL", "\"$releaseServer\"")
+            signingConfigs.findByName("release")?.let { signingConfig = it }
+        }
     }
 
     // real = Pleos·Android 어댑터, demo = Fake 어댑터 + 시나리오 재생(시연 영상용)

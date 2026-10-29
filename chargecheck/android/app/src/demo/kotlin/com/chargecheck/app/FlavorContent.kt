@@ -23,6 +23,7 @@ import com.chargecheck.core.port.VoiceIntent
 import com.chargecheck.feature.session.ChargeSessionMachine
 import com.chargecheck.feature.session.SessionCoordinator
 import com.chargecheck.feature.warning.ArrivalWarningCoordinator
+import com.chargecheck.feature.warning.distinctNames
 import com.chargecheck.ui.DemoScenarioItem
 import com.chargecheck.ui.DemoScreen
 import com.chargecheck.ui.WarningUi
@@ -99,7 +100,7 @@ fun FlavorContent() {
     DemoScreen(
         state = state,
         question = question,
-        warning = warning?.let { WarningUi(it.station.name, it.status.verdict, it.reasonText, it.alternative?.name) },
+        warning = warning?.let { it.alternative?.let { a -> distinctNames(it.station.name, a.name) }.let { names -> WarningUi(names?.first ?: it.station.name, it.status.verdict, it.reasonText, names?.second) } },
         engineOn = running,
         toast = toast,
         log = log,

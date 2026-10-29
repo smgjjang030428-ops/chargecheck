@@ -152,7 +152,8 @@ fun StationMapScreen(
                     SessionPanel(Modifier.weight(1f).fillMaxWidth(), state, engineOn = true, toast = toast, uploads = uploads)
                 } else {
                     SessionPanel(Modifier.weight(1f).fillMaxWidth(), state, engineOn = true, toast = toast, uploads = uploads)
-                    LogPanel(Modifier.weight(1f).fillMaxWidth(), log)
+                    // 판단 기록은 개발·시연 확인용. release에는 보이지 않는다
+                    if (devTools) LogPanel(Modifier.weight(1f).fillMaxWidth(), log)
                 }
                 if (devTools) {
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
