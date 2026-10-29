@@ -2,7 +2,7 @@
 
 > **충전할 때마다 차가 '실제로 충전됐는지' 자동으로 기록하고, 고장 난 충전소로 가는 운전자에게 도착 전에 대체 충전소를 알려주는 Pleos Connect 차량용 앱**
 
-현대자동차그룹 차량용 앱 개발 공모전 출품작입니다.
+현대자동차그룹 차량용 앱 개발 공모전 출품작입니다. 팀명: **바다사람(BDSR)**
 
 전기차가 충전소에 도착하면 앱은 구동 배터리 잔량(SOC)이 실제로 오르는지 지켜봅니다.
 - **SOC가 오르면:** "정상 충전"으로 자동 기록합니다.
@@ -23,7 +23,7 @@
 
 | 파일 | 위치 | 상태 |
 | --- | --- | --- |
-| release APK (서명됨) | [`apk/팀명_ChargeCheck_release.apk`](apk/) | ⏳ 1차 제출 전 업로드 예정 |
+| release APK (서명됨) | [`apk/BDSR_ChargeCheck_release.apk`](apk/BDSR_ChargeCheck_release.apk) | ✅ 2026-10-29 에뮬레이터 설치·실행 확인 |
 
 APK 용량이 GitHub 제한을 넘으면 [Releases](../../releases) 페이지에 올리고 이 표에 링크를 적습니다.
 
@@ -36,7 +36,7 @@ APK 용량이 GitHub 제한을 넘으면 [Releases](../../releases) 페이지에
 1. Pleos Connect 에뮬레이터(Android Automotive, API 34)를 실행합니다.
 2. APK 파일을 에뮬레이터 창에 끌어다 놓거나, 아래 명령으로 설치합니다.
    ```bash
-   adb install apk/팀명_ChargeCheck_release.apk
+   adb install apk/BDSR_ChargeCheck_release.apk
    ```
 3. 앱 목록에서 **차지체크**를 실행합니다.
 
