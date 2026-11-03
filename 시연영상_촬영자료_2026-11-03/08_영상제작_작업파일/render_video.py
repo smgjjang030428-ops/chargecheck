@@ -108,7 +108,7 @@ for idx,c in enumerate(chapters):
     cursor+=duration
 
 def raw(prefix): return next(RAW.glob(prefix+'*.mp4'))
-real=raw('01_'); success=raw('02_'); failure=raw('03_'); realnav=raw('05_')
+real=raw('01_'); success=raw('02_'); failure=raw('03_'); realnav=next(RAW.glob('05_real_내비경고와_목적지교체.mp4'))
 real_still=BASE/'02_최신_화면/01_release_상황카드와_보조지도.png'
 
 def render(c):
@@ -121,8 +121,8 @@ def render(c):
     elif name=='success': spec=(success,False,4.3,(1008,86,486,570),(680,798),(1050,140))
     elif name=='failure': spec=(failure,False,29,(640,68,1260,906),(1074,772),(760,150))
     # 실제 release 녹화: 내비 영역(경고 카드·안내 패널)만 잘라 크게. 경로 미리보기를 5초 붙잡아 내레이션과 맞춘다
-    elif name=='realwarn': spec=(realnav,False,35.5,(860,0,1300,1300),(850,850),(90,111),5)
-    elif name=='realswitch': spec=(realnav,False,53.5,(860,0,1300,1300),(850,850),(90,111))
+    elif name=='realwarn': spec=(realnav,False,30,(860,0,1300,1300),(850,850),(90,111),5)
+    elif name=='realswitch': spec=(realnav,False,48.5,(860,0,1300,1300),(850,850),(90,111))
     filters=[]
     if spec:
         file,still,ss,crop,scale,pos,*hold=spec

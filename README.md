@@ -31,7 +31,7 @@
 
 | 파일 | 위치 | 상태 |
 | --- | --- | --- |
-| release APK (서명됨) | [`apk/BDSR_ChargeCheck_release.apk`](apk/BDSR_ChargeCheck_release.apk) | ✅ 2026-11-03 경고 카드 버튼 수정 반영 · 에뮬레이터에서 내비 경고→목적지 교체까지 확인 |
+| release APK (서명됨) | [`apk/BDSR_ChargeCheck_release.apk`](apk/BDSR_ChargeCheck_release.apk) | ✅ 2026-11-03 경고 카드 버튼·대안 위치·내비 충전소 이름 짝짓기 수정 반영 · 에뮬레이터에서 내비 경고→목적지·경유지 교체까지 확인 |
 
 APK 용량이 GitHub 제한을 넘으면 [Releases](../../releases) 페이지에 올리고 이 표에 링크를 적습니다.
 
@@ -132,12 +132,12 @@ copy .env.example .env      # PUBLIC_API_KEY에 본인 공공데이터 키를 �
 | 대상 | 결과 |
 | --- | --- |
 | 충전 판단 `ChargeSessionMachine`·`SessionCoordinator` | ✅ 73개 통과 |
-| 도착 전 경고 `ArrivalWarningCoordinator`·경로 조언·공통 근거 문구·알림 우선순위 | ✅ 43개 통과 |
+| 도착 전 경고 `ArrivalWarningCoordinator`·경로 조언·공통 근거 문구·알림 우선순위 | ✅ 45개 통과 |
 | 기록 전송 대기열 `RemoteApiAdapter` (서버 오류·연결 끊김·429·401·422 처리) | ✅ 9개 통과 |
 | 경유지 보존 `WaypointReplacement` | ✅ 5개 통과 |
 | 지도 핀 묶음 `MapPinGrouping` | ✅ 3개 통과 |
 | 서버 판정·API·공공 동기화·경로 (pytest) | ✅ 64개 통과 (직전 평가, 이번 서버 코드 변경 없음) |
-| 에뮬레이터 확인 | ✅ 상황카드 중심 첫 화면, 핀 묶음·선택·상세 카드(11/02). release + 배포 서버로 운영 중지 충전소 목적지 → 내비 위 경고 → [대안으로 바꾸기] → 목적지 교체·"바뀌었어요"(11/03, 시연영상 04 구간). 경유지 교체는 기존 검증(10/28) |
+| 에뮬레이터 확인 | ✅ 상황카드 중심 첫 화면, 핀 묶음·선택·상세 카드(11/02). release + 배포 서버로 운영 중지 충전소 목적지 → 내비 위 경고 → [대안으로 바꾸기] → 목적지 교체·"바뀌었어요"(11/03, 시연영상 04 구간). realDebug + 로컬 시연 서버로 내비 충전소 목록의 충전소를 경유지로 넣으면 경고 → 경유지만 교체·목적지 유지(11/03, [2차 PT 시연 각본](시연영상_촬영자료_2026-11-03/03_촬영_대본/04_2차PT_에뮬레이터_시연각본.md)) |
 | 배포 서버 | ✅ 상태 확인, 주변 충전소 조회, 운영사 API 키 없이 차단(401) |
 
 > ⚠️ 프로젝트 경로에 한글이 있으면 Windows에서 Gradle 테스트가 실행되지 않습니다. 영문 경로에 clone하세요.
