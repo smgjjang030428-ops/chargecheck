@@ -25,7 +25,9 @@ import com.chargecheck.feature.session.SessionState
 import com.chargecheck.feature.session.stationId
 import com.chargecheck.feature.warning.ArrivalWarningCoordinator
 import com.chargecheck.feature.warning.matchStation
+import com.chargecheck.feature.warning.nameMatchesNavi
 import com.chargecheck.feature.warning.shouldShowRouteCard
+import com.chargecheck.feature.warning.stationSearchWords
 import com.chargecheck.ui.SearchUi
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -39,6 +41,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.time.Duration
 import java.time.Instant
 import java.util.UUID
@@ -205,8 +208,15 @@ internal class RealGraph private constructor(context: Context) {
         val at = if (t.location.lat != 0.0 || t.location.lon != 0.0) {
             t.location
         } else {
-            api.searchPlaces(t.name, navi.lastKnown() ?: DEFAULT_AREA).getOrNull().orEmpty()
-                .firstOrNull { it.stationId != null && it.name.trim() == t.name.trim() }?.location ?: return emptyList()
+            // 내비는 충전소 이름을 공공 데이터와 다르게 붙인다("SW드림타운 3 전기차충전소" = "경기성남 SW드림타운 3").
+            // 이름 그대로 못 찾으면 핵심 낱말로 다시 찾는다
+            val from = navi.lastKnown() ?: DEFAULT_AREA
+            val exact = api.searchPlaces(t.name, from).getOrNull().orEmpty()
+                .firstOrNull { it.stationId != null && it.name.trim() == t.name.trim() }
+            val byWords = exact ?: stationSearchWords(t.name).takeIf { it.isNotBlank() && it != t.name.trim() }?.let { q ->
+                api.searchPlaces(q, from).getOrNull().orEmpty().filter { it.stationId != null && nameMatchesNavi(it.name, t.name) }.singleOrNull()
+            }
+            byWords?.location ?: return emptyList()
         }
         return api.nearbyWithStatus(at, 150).getOrNull().orEmpty().map { it.station }
     }
@@ -265,7 +275,8 @@ internal class RealGraph private constructor(context: Context) {
             api.nearbyWithStatus(focus, 3_000).getOrNull()?.let { stations.value = it }
             return
         }
-        val car = navi.lastKnown()
+        // 내비 위치는 요청 뒤 콜백으로 와서 시동 직후 첫 조회엔 비어 있다. 잠깐 기다려 강남 기본 위치로 불러오지 않게 한다
+        val car = navi.lastKnown() ?: withTimeoutOrNull(3_000) { navi.locations().first() }
         val near = car?.let { api.nearbyWithStatus(it, 5_000) }
         val r = near?.takeIf { it.getOrNull().orEmpty().isNotEmpty() } ?: api.nearbyWithStatus(DEFAULT_AREA, 5_000)
         val list = r.getOrNull().orEmpty()

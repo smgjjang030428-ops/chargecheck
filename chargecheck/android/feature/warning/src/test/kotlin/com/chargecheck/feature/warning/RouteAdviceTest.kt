@@ -78,4 +78,25 @@ class RouteAdviceTest {
         assertEquals(two, matchStation(RouteTarget("경기성남 SW드림타운 2", noWhere, null), listOf(one, two)))
         assertNull(matchStation(RouteTarget("SW드림타운", noWhere, null), listOf(one, two)))
     }
+
+    @Test
+    fun `내비가 붙인 이름도 낱말과 번호로 짝짓는다`() {
+        // 에뮬레이터 Pleos 내비 충전소 목록의 이름(2026-11-03 확인)과 공공 데이터 이름이 다르다
+        val one = station("A", "경기성남 SW드림타운 1")
+        val two = station("B", "경기성남 SW드림타운 2")
+        val three = station("C", "경기성남 SW드림타운 3")
+        val all = listOf(one, two, three)
+        val noWhere = com.chargecheck.core.model.GeoPoint(0.0, 0.0)
+        assertEquals(three, matchStation(RouteTarget("SW드림타운 3 전기차충전소", here, null), all))
+        assertEquals(three, matchStation(RouteTarget("SW드림타운 3 전기차충전소", noWhere, null), all))
+        // 번호가 없으면 셋 중 고를 수 없다
+        assertNull(matchStation(RouteTarget("SW드림타운 전기차충전소", here, null), all))
+        // 3이 13에 맞지 않는다
+        assertNull(matchStation(RouteTarget("SW드림타운 3", here, null), listOf(one, station("D", "경기성남 SW드림타운 13"))))
+        // 좌표 없는 경유지를 서버에서 찾을 때 쓰는 검색어와 결과 고르기
+        assertEquals("SW드림타운 3", stationSearchWords("SW드림타운 3 전기차충전소"))
+        assertEquals(true, nameMatchesNavi("경기성남 SW드림타운 3", "SW드림타운 3 전기차충전소"))
+        assertEquals(false, nameMatchesNavi("경기성남 SW드림타운 1", "SW드림타운 3 전기차충전소"))
+        assertEquals(false, nameMatchesNavi("아무 충전소", "급속 충전소"))
+    }
 }

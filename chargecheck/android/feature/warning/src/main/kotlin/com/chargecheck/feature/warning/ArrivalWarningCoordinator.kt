@@ -277,7 +277,8 @@ class ArrivalWarningCoordinator(
             log("목적지 ${station.name}: ${status.verdict} → 경고 없음" + if (status.message.isNotBlank()) " (${status.message})" else "")
             return true
         }
-        val here = location.lastKnown() ?: station.location
+        // 대안은 경고한 충전소 주변에서 찾는다. 차 위치로 찾으면 먼 목적지 대신 출발지 옆 충전소로 바꾸게 된다
+        val here = station.location
         // 대안 조회가 실패해도 위험 경고는 띄운다
         val alternatives = api.alternatives(station.id, here)
         if (gen != generation) return true

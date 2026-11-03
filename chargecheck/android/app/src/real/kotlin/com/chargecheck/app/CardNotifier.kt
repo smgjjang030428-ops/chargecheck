@@ -47,8 +47,8 @@ internal class CardNotifier(private val context: Context, private val graph: Rea
             w?.let { warn ->
                 val alt = warn.alternative
                 // 두 이름이 똑같이 잘리지 않게 함께 줄인다("경기성남 SW…" → "SW드림타운 2"/"SW드림타운 1").
-                // 대안 이름은 내용 줄에만 쓰고 버튼은 "대안으로 바꾸기"로 고정한다(버튼 폭이 좁아 이름을 넣으면 잘리고 줄이 바뀜)
-                val (stationName, altName) = alt?.let { distinctNames(warn.station.name, it.name, 10, 14) } ?: (short(warn.station.name, 10) to null)
+                // 이름은 내용 줄(두 줄까지)에 14자씩 쓰고 버튼은 "대안으로 바꾸기"로 고정한다(버튼 폭이 좁아 이름을 넣으면 잘리고 줄이 바뀜)
+                val (stationName, altName) = alt?.let { distinctNames(warn.station.name, it.name, 14, 14) } ?: (short(warn.station.name, 14) to null)
                 val altText = altName?.let { a -> " → $a" + (warn.alternativeStatus?.let { " · ${conciseEvidence(it)}" } ?: "") }.orEmpty()
                 Slot(NotificationKind.WARNING, ID_WARNING, Card(
                     warningTitle(warn.status),

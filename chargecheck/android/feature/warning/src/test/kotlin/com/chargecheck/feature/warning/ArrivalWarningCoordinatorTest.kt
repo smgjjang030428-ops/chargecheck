@@ -58,6 +58,10 @@ class ArrivalWarningCoordinatorTest {
     /** 내비가 요청은 받지만 경로를 바꾸지 않는다. */
     private var naviIgnores = false
     private var enabled = true
+    /** 차 위치. */
+    private var carAt: GeoPoint? = null
+    /** 대체 충전소를 물은 위치들. */
+    private val alternativeQueries = mutableListOf<GeoPoint>()
 
     private fun Station.target() = RouteTarget(name, location, id.value)
     private fun route() = targets.value.map { it.poiId ?: it.name }
@@ -94,6 +98,7 @@ class ArrivalWarningCoordinatorTest {
             }
             override suspend fun nearbyStations(at: GeoPoint, radiusM: Int) = Result.success(listOf(red, green))
             override suspend fun alternatives(id: StationId, at: GeoPoint): Result<List<Pair<Station, StationStatus>>> {
+                alternativeQueries += at
                 if (failAlternatives > 0) {
                     failAlternatives--
                     return Result.failure(IOException("시간 초과"))
@@ -104,7 +109,7 @@ class ArrivalWarningCoordinatorTest {
         },
         location = object : LocationPort {
             override fun locations() = emptyFlow<GeoPoint>()
-            override suspend fun lastKnown(): GeoPoint? = null
+            override suspend fun lastKnown(): GeoPoint? = carAt
         },
         resolveStation = { t -> listOf(red, green, other).firstOrNull { it.id.value == t.poiId } },
         enabled = { enabled },
@@ -127,6 +132,16 @@ class ArrivalWarningCoordinatorTest {
         assertNull(coordinator.warning.value)
         assertEquals(listOf("G"), route()) // [A] → [B]. 고장 충전소가 목적지로 남지 않는다
         assertEquals("강남 급속충전소(으)로 바뀌었어요", coordinator.swapStatus.value)
+    }
+
+    @Test
+    fun `대안은 차 주변이 아니라 경고한 충전소 주변에서 찾는다`() = runTest(UnconfinedTestDispatcher()) {
+        // 13km 떨어진 목적지 충전소의 대안으로 차 바로 옆 충전소를 고르던 문제(2026-11-03 에뮬레이터)
+        carAt = cityHall.location
+        coordinator.start(backgroundScope)
+        targets.value = listOf(red.target())
+        assertNotNull(coordinator.warning.value)
+        assertEquals(listOf(red.location), alternativeQueries)
     }
 
     @Test
