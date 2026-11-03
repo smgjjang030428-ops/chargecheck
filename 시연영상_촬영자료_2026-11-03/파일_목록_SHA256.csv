@@ -1,8 +1,8 @@
 ﻿file,size_bytes,sha256,source
 00_먼저_읽기.md,3488,d567686148cfa33331a7949674f8c3c1f4227bcbd47fc965f82f080301ae63b8,2026-11-03 2차 편집에서 추가·수정
 01_APK/ChargeCheck_demo_debug.apk,25889285,ac68e894228a844719d620dc01ae6912f746e17889ef8f43f9a710d36c4c5749,2026-11-03 PT 시연 준비·대안 위치 수정에서 추가·수정
-01_APK/ChargeCheck_real_debug_로컬서버용.apk,31416645,47685370d7a5e3ddd9a72da5b672ce3f9f279c6dce7a1a491296b5a2d50fa341,2026-11-03 PT 시연 준비·대안 위치 수정에서 추가·수정
-01_APK/ChargeCheck_real_release.apk,24952446,10685bee61d77eb90f15323bea024ff81ae1821c06084abea7d234c28404fc81,2026-11-03 PT 시연 준비·대안 위치 수정에서 추가·수정
+01_APK/ChargeCheck_real_debug_로컬서버용.apk,31416645,d2a3ea27823066a2ae1099c467d9ae4ae62c5b6f6a2378b1c36d0e8acb910358,2026-11-03 내비 검색 권한(NAVI_CUSTOM_MAP) 추가
+01_APK/ChargeCheck_real_release.apk,24952470,93be8bd013125f180537cac63c574a045446c3299100dcf89cd288dad7614d88,2026-11-03 내비 검색 권한(NAVI_CUSTOM_MAP) 추가
 02_최신_화면/01_release_상황카드와_보조지도.png,2023538,24b4eafdbe97f3589e02999496fbb9128853cce020a6c0a50316aaf0e73926f4,2026-11-02 실제 release 화면 캡처
 02_최신_화면/02_demo_시나리오_선택화면.png,127725,c98f193d775eed873539bfa5e9c030a6173460e496ea38e9ce5e67a31fa630db,2026-11-02 가짜 차량 데이터 시연 화면
 02_최신_화면/03_demo_실패제보와_대안카드.png,161399,ce826b99480373c6e5acdbf911a6fa1772398b84fe4cd964e1ec8e3300e3b358,2026-11-02 최종 공통 경고 카드 시연 화면
