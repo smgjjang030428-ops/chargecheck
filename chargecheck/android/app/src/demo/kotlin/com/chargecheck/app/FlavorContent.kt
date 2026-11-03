@@ -24,6 +24,8 @@ import com.chargecheck.feature.session.ChargeSessionMachine
 import com.chargecheck.feature.session.SessionCoordinator
 import com.chargecheck.feature.warning.ArrivalWarningCoordinator
 import com.chargecheck.feature.warning.distinctNames
+import com.chargecheck.feature.warning.conciseEvidence
+import com.chargecheck.feature.warning.warningTitle
 import com.chargecheck.ui.DemoScenarioItem
 import com.chargecheck.ui.DemoScreen
 import com.chargecheck.ui.WarningUi
@@ -100,7 +102,11 @@ fun FlavorContent() {
     DemoScreen(
         state = state,
         question = question,
-        warning = warning?.let { it.alternative?.let { a -> distinctNames(it.station.name, a.name) }.let { names -> WarningUi(names?.first ?: it.station.name, it.status.verdict, it.reasonText, names?.second) } },
+        warning = warning?.let { w ->
+            val names = w.alternative?.let { a -> distinctNames(w.station.name, a.name) }
+            WarningUi(names?.first ?: w.station.name, w.status.verdict, conciseEvidence(w.status, now), names?.second,
+                title = warningTitle(w.status), alternativeEvidence = w.alternativeStatus?.let { conciseEvidence(it, now) })
+        },
         engineOn = running,
         toast = toast,
         log = log,

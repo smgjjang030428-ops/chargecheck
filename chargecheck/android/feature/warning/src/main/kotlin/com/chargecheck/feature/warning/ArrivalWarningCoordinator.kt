@@ -80,6 +80,7 @@ class ArrivalWarningCoordinator(
     private var lastTargets: List<RouteTarget> = emptyList()
     private var scope: CoroutineScope? = null
     private var job: Job? = null
+    private var cancellationJob: Job? = null
     private var retryJob: Job? = null
 
     fun start(scope: CoroutineScope) {
@@ -87,6 +88,9 @@ class ArrivalWarningCoordinator(
         this.scope = scope
         job = scope.launch {
             navi.routeTargets().collect { onTargets(it) }
+        }
+        cancellationJob = scope.launch {
+            navi.routeCancellations().collect { clearRoute() }
         }
     }
 
@@ -97,9 +101,17 @@ class ArrivalWarningCoordinator(
     suspend fun onTargets(targets: List<RouteTarget>) {
         if (targets.isNotEmpty()) lastTargets = targets
         val index = targets.indexOfFirst { resolveStation(it) != null }
-        if (index < 0) return
+        if (index < 0) {
+            // 빈 목록은 재탐색 중일 수 있다. 명시적 취소는 routeCancellations에서 별도로 받는다.
+            if (targets.isNotEmpty()) clearRoute(keepTargets = true)
+            return
+        }
         val station = resolveStation(targets[index]) ?: return
-        if (!enabled() || station.id == checked || station.id == watching) return
+        if (!enabled()) {
+            clearRoute(keepTargets = true)
+            return
+        }
+        if (station.id == checked || station.id == watching) return
         val gen = ++generation
         retryJob?.cancel()
         watching = station.id
@@ -121,15 +133,27 @@ class ArrivalWarningCoordinator(
     fun stop() {
         job?.cancel()
         job = null
+        cancellationJob?.cancel()
+        cancellationJob = null
         retryJob?.cancel()
         retryJob = null
         watching = null
+        generation++
     }
 
     fun reset() {
         stop()
+        clearRoute()
+    }
+
+    /** 구독은 유지하고 이전 경로의 작업·표시만 무효화한다. */
+    private fun clearRoute(keepTargets: Boolean = false) {
+        generation++
+        retryJob?.cancel()
+        retryJob = null
         checked = null
-        lastTargets = emptyList()
+        watching = null
+        if (!keepTargets) lastTargets = emptyList()
         _warning.value = null
         _swapStatus.value = null
         _routeCheck.value = null
@@ -173,6 +197,7 @@ class ArrivalWarningCoordinator(
             val waypoints = route.dropLast(1).map { it.withLocation() }
             if (waypoints.any { it == null }) {
                 swap("경유지 위치를 몰라 목적지를 바꾸지 않았어요")
+                restoreWarningIfCurrent(w)
                 return
             }
             navi.replaceDestination(target, waypoints.filterNotNull())
@@ -180,7 +205,7 @@ class ArrivalWarningCoordinator(
         if (result.isFailure) {
             swap("$what 바꾸기 실패 · 다시 눌러 주세요")
             log("$what 교체 실패: ${w.station.name} → ${alt.name} (${result.exceptionOrNull()?.message})")
-            _warning.value = w // 다시 고를 수 있게
+            restoreWarningIfCurrent(w)
             return
         }
         swap("${alt.name}(으)로 바꾸는 중")
@@ -195,6 +220,18 @@ class ArrivalWarningCoordinator(
         } else {
             swap("내비 경로가 바뀌었는지 확인하지 못했어요 · 내비 화면을 확인해 주세요")
             log("$what 교체 확인 실패(${confirmTimeoutMs / 1000}초): ${w.station.name} → ${alt.name}")
+            restoreWarningIfCurrent(w)
+        }
+    }
+
+    /** 요청 실패·확인 시간 초과 뒤에도 원래 충전소가 남아 있을 때만 다시 선택하게 한다. */
+    private suspend fun restoreWarningIfCurrent(warning: ArrivalWarning) {
+        if (!enabled()) return
+        val current = withTimeoutOrNull(1_000) { navi.routeTargets().first() } ?: return
+        if (current.any { resolveStation(it)?.id == warning.station.id } &&
+            (_warning.value == null || _warning.value?.station?.id == warning.station.id)
+        ) {
+            _warning.value = warning
         }
     }
 

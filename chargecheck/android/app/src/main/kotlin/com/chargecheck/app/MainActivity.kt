@@ -4,6 +4,8 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.ui.graphics.Color
 import kotlinx.coroutines.flow.MutableStateFlow
 
 /** 화면 내용은 flavor마다 다르다: demo = 시나리오 재생, real = Pleos 어댑터. ([FlavorContent]) */
@@ -11,7 +13,11 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
-            MaterialTheme {
+            MaterialTheme(colorScheme = darkColorScheme(
+                primary = Color(0xFFECEDEE), onPrimary = Color(0xFF121314),
+                background = Color(0xFF121314), onBackground = Color(0xFFECEDEE),
+                surface = Color(0xFF1E2022), onSurface = Color(0xFFECEDEE),
+            )) {
                 FlavorContent()
             }
         }

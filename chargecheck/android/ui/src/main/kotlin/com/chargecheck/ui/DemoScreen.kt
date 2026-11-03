@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -55,7 +56,7 @@ data class DemoScenarioItem(val id: String, val title: String)
 internal val Bg = Color(0xFF121314)
 internal val Panel = Color(0xFF1E2022)
 internal val TextMain = Color(0xFFECEDEE)
-internal val TextSub = Color(0xFF9A9EA3)
+internal val TextSub = Color(0xFFB3BAC2)
 internal val Green = Color(0xFF2E9E5B)
 internal val Yellow = Color(0xFFD9A400)
 internal val Red = Color(0xFFD64541)
@@ -69,6 +70,8 @@ data class WarningUi(
     val verdict: Verdict,
     val reason: String,
     val alternativeName: String?,
+    val title: String = "가는 충전소에 주의가 필요해요",
+    val alternativeEvidence: String? = null,
 )
 
 /**
@@ -104,7 +107,7 @@ fun DemoScreen(
             LogPanel(Modifier.weight(1f).fillMaxHeight(), log)
         }
         if (warning != null) {
-            WarningCard(Modifier.align(Alignment.TopCenter).padding(top = 40.dp), warning, onWarningChoice)
+            WarningCard(Modifier.align(Alignment.TopCenter).fillMaxWidth(0.62f).padding(top = 40.dp), warning, onWarningChoice)
         }
         if (question != null) {
             AskSheet(Modifier.align(Alignment.BottomCenter), question, onAnswer)
@@ -127,7 +130,7 @@ private fun ScenarioPanel(
     onStop: () -> Unit,
 ) {
     PanelBox(modifier) {
-        Text("차지체크", color = TextMain, fontSize = 30.sp, fontWeight = FontWeight.Bold)
+        Text("차지체크", color = TextMain, fontSize = 30.sp, lineHeight = 39.sp, fontWeight = FontWeight.Bold)
         Text("시연 모드 · 가짜 차량 데이터", color = TextSub, fontSize = 16.sp)
         Spacer(Modifier.height(20.dp))
         Text("시나리오", color = TextSub, fontSize = 16.sp)
@@ -209,11 +212,11 @@ internal fun SessionPanel(modifier: Modifier, state: SessionState, engineOn: Boo
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.width(18.dp).height(18.dp).clip(RoundedCornerShape(9.dp)).background(badge))
             Spacer(Modifier.width(12.dp))
-            Text(state.label(), color = TextMain, fontSize = 34.sp, fontWeight = FontWeight.Bold)
+            Text(state.label(), color = TextMain, fontSize = 34.sp, lineHeight = 44.sp, fontWeight = FontWeight.Bold)
         }
         Spacer(Modifier.height(32.dp))
         if (soc != null) {
-            Text("배터리 $soc%", color = TextMain, fontSize = 56.sp, fontWeight = FontWeight.Bold)
+            Text("배터리 $soc%", color = TextMain, fontSize = 56.sp, lineHeight = 73.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(12.dp))
             LinearProgressIndicator(
                 progress = { soc / 100f },
@@ -261,10 +264,10 @@ internal fun LogPanel(modifier: Modifier, log: List<LogEntry>) {
 @Composable
 internal fun AskSheet(modifier: Modifier, question: Effect.Ask, onAnswer: (VoiceIntent) -> Unit) {
     Column(
-        modifier.fillMaxWidth(0.62f).clip(RoundedCornerShape(20.dp)).background(Color(0xFF2B2E31)).padding(28.dp),
+        modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(Panel).padding(28.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text(question.question, color = TextMain, fontSize = 30.sp, fontWeight = FontWeight.Bold)
+        Text(question.question, color = TextMain, fontSize = 30.sp, lineHeight = 39.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(20.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             val (yes, other) = if (question.retro) "응" to ("아니요" to VoiceIntent.NO) else "응, 안 돼요" to ("아직 연결 중" to VoiceIntent.WAIT)
@@ -289,28 +292,37 @@ internal fun WarningCard(modifier: Modifier, warning: WarningUi, onChoice: (Voic
         Verdict.GRAY -> Gray
     }
     Column(
-        modifier.fillMaxWidth(0.62f).clip(RoundedCornerShape(20.dp)).background(Color(0xFF2B2E31)).padding(28.dp),
+        modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(Panel).padding(28.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.width(18.dp).height(18.dp).clip(RoundedCornerShape(9.dp)).background(color))
             Spacer(Modifier.width(12.dp))
-            Text("가는 충전소에 최근 실패 기록이 있어요", color = TextMain, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+            Text(warning.title, color = TextMain, fontSize = 32.sp, lineHeight = 42.sp, fontWeight = FontWeight.Bold)
         }
         Spacer(Modifier.height(10.dp))
-        Text("${warning.stationName} · ${warning.reason}", color = TextSub, fontSize = 20.sp)
+        Text(warning.stationName, color = TextMain, fontSize = 24.sp)
+        Spacer(Modifier.height(8.dp))
+        Text(warning.reason, color = TextSub, fontSize = 20.sp)
+        warning.alternativeName?.let { name ->
+            Spacer(Modifier.height(24.dp))
+            Text("대안 한 곳", color = TextSub, fontSize = 18.sp)
+            Spacer(Modifier.height(6.dp))
+            Text(name, color = TextMain, fontSize = 26.sp, lineHeight = 34.sp, fontWeight = FontWeight.Bold)
+            warning.alternativeEvidence?.let { Text(it, color = TextSub, fontSize = 19.sp) }
+        }
         Spacer(Modifier.height(20.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             if (warning.alternativeName != null) {
                 Button(
                     onClick = { onChoice(VoiceIntent.SWITCH) },
-                    colors = ButtonDefaults.buttonColors(containerColor = Green, contentColor = TextMain),
+                    colors = ButtonDefaults.buttonColors(containerColor = TextMain, contentColor = Bg),
                     shape = RoundedCornerShape(14.dp),
                 ) {
-                    Text("${warning.alternativeName.withRo()} 바꾸기", fontSize = 22.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 8.dp))
+                    Text("대안으로 바꾸기", fontSize = 22.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp))
                 }
             }
             OutlinedButton(onClick = { onChoice(VoiceIntent.KEEP) }, shape = RoundedCornerShape(14.dp)) {
-                Text("그대로", color = TextMain, fontSize = 22.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 8.dp))
+                Text("현재 경로 유지", color = TextMain, fontSize = 22.sp, modifier = Modifier.padding(horizontal = 18.dp, vertical = 10.dp))
             }
         }
     }
@@ -320,10 +332,10 @@ internal fun WarningCard(modifier: Modifier, warning: WarningUi, onChoice: (Voic
 @Composable
 internal fun ChargerPickSheet(modifier: Modifier, pick: ChargerPick, onPick: (String?) -> Unit) {
     Column(
-        modifier.fillMaxWidth(0.62f).clip(RoundedCornerShape(20.dp)).background(Color(0xFF2B2E31)).padding(28.dp),
+        modifier.fillMaxWidth().clip(RoundedCornerShape(20.dp)).background(Panel).padding(28.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text("몇 번 충전기였나요?", color = TextMain, fontSize = 30.sp, fontWeight = FontWeight.Bold)
+        Text("몇 번 충전기였나요?", color = TextMain, fontSize = 30.sp, lineHeight = 39.sp, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp))
         Text("충전기에 적힌 번호를 고르면 그 충전기만 실패로 기록돼요", color = TextSub, fontSize = 18.sp)
         Spacer(Modifier.height(20.dp))

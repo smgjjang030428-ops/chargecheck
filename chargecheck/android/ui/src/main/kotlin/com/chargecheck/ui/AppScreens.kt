@@ -35,7 +35,7 @@ import androidx.compose.ui.unit.sp
 fun ConsentScreen(onAgree: () -> Unit) {
     Box(Modifier.fillMaxSize().background(Bg).padding(48.dp), contentAlignment = Alignment.Center) {
         Column(Modifier.fillMaxWidth(0.7f), verticalArrangement = Arrangement.spacedBy(18.dp)) {
-            Text("차지체크", color = TextMain, fontSize = 40.sp, fontWeight = FontWeight.Bold)
+            Text("차지체크", color = TextMain, fontSize = 40.sp, lineHeight = 52.sp, fontWeight = FontWeight.Bold)
             Text("충전할 때마다 차가 결과를 자동으로 남겨, 다음 차가 고장 난 충전기로 헛걸음하지 않게 해요.", color = TextMain, fontSize = 24.sp)
             Spacer(Modifier.height(4.dp))
             Fact("모으는 것", "충전소 · 충전 결과(됨/안 됨) · 충전 전후 배터리 % · 시각")
@@ -47,7 +47,7 @@ fun ConsentScreen(onAgree: () -> Unit) {
                 onClick = onAgree,
                 shape = RoundedCornerShape(16.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = Green),
-            ) { Text("동의하고 시작", fontSize = 26.sp, modifier = Modifier.padding(horizontal = 24.dp, vertical = 10.dp)) }
+            ) { Text("동의하고 시작", fontSize = 26.sp, lineHeight = 34.sp, modifier = Modifier.padding(horizontal = 24.dp, vertical = 10.dp)) }
         }
     }
 }
@@ -71,7 +71,7 @@ fun SettingsSheet(items: List<SettingItem>, pending: Int, onWithdraw: () -> Unit
             Modifier.fillMaxWidth(0.6f).clip(RoundedCornerShape(24.dp)).background(Panel).padding(32.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp),
         ) {
-            Text("설정", color = TextMain, fontSize = 32.sp, fontWeight = FontWeight.Bold)
+            Text("설정", color = TextMain, fontSize = 32.sp, lineHeight = 42.sp, fontWeight = FontWeight.Bold)
             items.forEach { item ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {

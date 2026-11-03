@@ -29,6 +29,8 @@ import com.chargecheck.feature.session.stationId
 import com.chargecheck.feature.warning.RouteCheck
 import com.chargecheck.feature.warning.distinctNames
 import com.chargecheck.feature.warning.reasonText
+import com.chargecheck.feature.warning.warningTitle
+import com.chargecheck.feature.warning.conciseEvidence
 import com.chargecheck.ui.ConsentScreen
 import com.chargecheck.ui.MapStation
 import com.chargecheck.ui.OverviewUi
@@ -106,7 +108,7 @@ private fun RealContent(settings: AppSettings, onWithdraw: () -> Unit) {
 
     // 경로 카드가 열려 있으면 경로 근처 충전소를, 아니면 주변 충전소를 지도에 찍는다
     val shown = plan?.let { p -> p.candidates.map { c -> c.stop.toMap(highlight = c.stop.station.id == p.recommendedId) } }
-        ?: stations.map { it.toMap() }
+        ?: stations.map { it.toMap(highlight = it.station.id == warning?.alternative?.id, routeTarget = it.station.id == routeCheck?.station?.id) }
 
     Box {
         StationMapScreen(
@@ -116,7 +118,13 @@ private fun RealContent(settings: AppSettings, onWithdraw: () -> Unit) {
             parked = parked,
             state = state,
             question = question,
-            warning = warning?.let { it.alternative?.let { a -> distinctNames(it.station.name, a.name) }.let { names -> WarningUi(names?.first ?: it.station.name, it.status.verdict, it.reasonText, names?.second) } },
+            warning = warning?.let { w ->
+                val names = w.alternative?.let { a -> distinctNames(w.station.name, a.name) }
+                WarningUi(
+                    names?.first ?: w.station.name, w.status.verdict, conciseEvidence(w.status), names?.second,
+                    title = warningTitle(w.status), alternativeEvidence = w.alternativeStatus?.let { conciseEvidence(it) },
+                )
+            },
             toast = toast,
             log = log,
             uploads = uploads,
@@ -232,10 +240,10 @@ private fun RealContent(settings: AppSettings, onWithdraw: () -> Unit) {
                 SettingsSheet(
                     items = listOf(
                         SettingItem("가는 길 충전소", "내비 목적지까지 충전이 필요할 때만 알려줘요", settings.routeCards) { settings.routeCards = it; settingsVersion++ },
-                        SettingItem("도착 전 경고", "가는 충전소에 최근 실패 기록이 있으면 알려줘요", settings.arrivalWarning) {
+                        SettingItem("도착 전 경고", "가는 충전소에 점검 상태나 실패 제보가 있으면 알려줘요", settings.arrivalWarning) {
                             settings.arrivalWarning = it
                             settingsVersion++
-                            if (it) scope.launch { graph.warning.recheck() }
+                            scope.launch { graph.warning.recheck() }
                         },
                         SettingItem("내비 위 알림 카드", "차지체크 화면이 안 보일 때 카드를 알림으로 띄워요", settings.overlayCards) { settings.overlayCards = it; settingsVersion++ },
                     ),
@@ -248,9 +256,9 @@ private fun RealContent(settings: AppSettings, onWithdraw: () -> Unit) {
     }
 }
 
-private fun NearbyStation.toMap(highlight: Boolean = false): MapStation {
-    val reason = status.message.ifBlank { reasonText(status.reasonCode) } + (status.notice?.let { " · $it" } ?: "")
-    return MapStation(station.id.value, station.name, station.location, status.verdict, reason, info, status.chargers, highlight)
+private fun NearbyStation.toMap(highlight: Boolean = false, routeTarget: Boolean = false): MapStation {
+    val reason = conciseEvidence(status) + (status.notice?.let { " · $it" } ?: "")
+    return MapStation(station.id.value, station.name, station.location, status.verdict, reason, info, status.chargers, highlight, routeTarget)
 }
 
 /** 충전 중이 아닐 때 첫 화면 패널. 숫자는 받은 목록에서만 센다(지도에 보이는 지역, 전국 아님). */
@@ -266,8 +274,8 @@ private fun overviewUi(load: StationsLoad, check: RouteCheck?, stations: List<Ne
     }
     val count = stations.groupingBy { it.status.verdict }.eachCount()
     val area = stations.takeIf { it.isNotEmpty() }?.let {
-        "지도에 보이는 충전소 ${it.size}곳 · 최근 정상 ${count[Verdict.GREEN] ?: 0} · 주의 ${count[Verdict.YELLOW] ?: 0} · " +
-            "실패 많음 ${count[Verdict.RED] ?: 0} · 확인 기록 없음 ${count[Verdict.GRAY] ?: 0}"
+        "불러온 주변 충전소 ${it.size}곳 · 최근 확인 ${count[Verdict.GREEN] ?: 0} · " +
+            "주의 ${(count[Verdict.YELLOW] ?: 0) + (count[Verdict.RED] ?: 0)} · 미확인 ${count[Verdict.GRAY] ?: 0}"
     }
     val byCar = stations.count { it.status.reasonCode == ReasonCode.RECENT_SUCCESS }
     val byOperator = stations.count { it.status.reasonCode == ReasonCode.PUBLIC_CHARGING }
@@ -283,6 +291,15 @@ private fun overviewUi(load: StationsLoad, check: RouteCheck?, stations: List<Ne
         area = area,
         evidence = evidence,
         pending = if (pending > 0) "전송 대기 ${pending}건 · 연결되면 다시 보내요" else null,
+        routeName = check?.station?.name,
+        routeTitle = check?.status?.let { s ->
+            when (s.verdict) {
+                Verdict.GREEN -> "최근 충전 확인 근거가 있어요"
+                Verdict.GRAY -> "최근 실제 충전 확인은 아직 없어요"
+                Verdict.RED, Verdict.YELLOW -> warningTitle(s)
+            }
+        },
+        routeEvidence = check?.status?.let { conciseEvidence(it) },
     )
 }
 

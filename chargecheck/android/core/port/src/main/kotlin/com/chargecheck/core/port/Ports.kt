@@ -40,11 +40,14 @@ data class RouteTarget(val name: String, val location: GeoPoint, val poiId: Stri
 interface NaviPort {
     /** 기본 내비의 목적지·경유지 변화. */
     fun routeTargets(): Flow<List<RouteTarget>>
+    /** 명시적으로 길안내가 취소됐을 때. 재탐색 중 일시적인 빈 경로와 구분한다. */
+    fun routeCancellations(): Flow<Unit> = emptyFlow()
     /** 목적지·경유지 도착. */
     fun arrivals(): Flow<RouteTarget>
     suspend fun addWaypoint(target: RouteTarget): Result<Unit>
-    /** [index]번째 경유지(0부터)를 [target]으로 바꾼다. 지원하지 않으면 경유지로 더한다. Pleos: removeWaypoint + addWaypoint */
-    suspend fun replaceWaypoint(index: Int, target: RouteTarget): Result<Unit> = addWaypoint(target)
+    /** [index]번째 경유지(0부터)만 [target]으로 바꾼다. 교체 미지원이면 경로를 건드리지 않고 실패한다. */
+    suspend fun replaceWaypoint(index: Int, target: RouteTarget): Result<Unit> =
+        Result.failure(UnsupportedOperationException("경유지 교체 미지원"))
     /** 기본 내비에 목적지를 넘겨 길안내를 시작한다(지도 화면의 [여기로 안내]). Pleos: NaviHelper.requestRoute */
     suspend fun setDestination(target: RouteTarget): Result<Unit>
     /**

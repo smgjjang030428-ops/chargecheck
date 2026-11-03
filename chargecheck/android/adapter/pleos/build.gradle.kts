@@ -13,6 +13,7 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+    testOptions.unitTests.all { it.useJUnitPlatform() }
 }
 
 kotlin {
@@ -25,4 +26,8 @@ dependencies {
     implementation(libs.kotlinx.coroutines.core)
     implementation(libs.pleos.vehicle)
     implementation(libs.pleos.navihelper)
+    testImplementation(platform(libs.junit.bom))
+    testImplementation(libs.junit.jupiter)
+    testImplementation(libs.kotlin.test.junit5)
+    testRuntimeOnly(libs.junit.platform.launcher)
 }

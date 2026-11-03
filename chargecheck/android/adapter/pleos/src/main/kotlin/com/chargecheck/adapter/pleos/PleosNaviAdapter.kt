@@ -43,6 +43,7 @@ class PleosNaviAdapter(context: Context) : NaviPort, LocationPort {
     private var waypoints: List<RouteTarget> = emptyList()
 
     private val targets = MutableStateFlow<List<RouteTarget>>(emptyList())
+    private val cancellations = MutableSharedFlow<Unit>(extraBufferCapacity = 8)
     private val arrived = MutableSharedFlow<RouteTarget>(extraBufferCapacity = 8)
     private val location = MutableStateFlow<GeoPoint?>(null)
 
@@ -76,7 +77,13 @@ class PleosNaviAdapter(context: Context) : NaviPort, LocationPort {
         override fun onRoutingCompleted() = refresh("경로 계산 완료")
         override fun onReRouteEnded() = refresh("재탐색 완료")
         override fun onRouteEnded() = refresh("onRouteEnded")
-        override fun onRouteCancelled() = refresh("길안내 취소")
+        override fun onRouteCancelled() {
+            Log.d(TAG, "길안내 취소 → 이전 경로 정리")
+            destination = null
+            waypoints = emptyList()
+            publish()
+            cancellations.tryEmit(Unit)
+        }
 
         override fun onDestinationArrived(info: DestinationArrivedInfo) {
             Log.d(TAG, "목적지 도착: ${info.name}")
@@ -131,6 +138,7 @@ class PleosNaviAdapter(context: Context) : NaviPort, LocationPort {
     }
 
     override fun routeTargets(): Flow<List<RouteTarget>> = targets
+    override fun routeCancellations(): Flow<Unit> = cancellations
     override fun arrivals(): Flow<RouteTarget> = arrived
 
     override suspend fun addWaypoint(target: RouteTarget): Result<Unit> = runCatching {
@@ -140,13 +148,11 @@ class PleosNaviAdapter(context: Context) : NaviPort, LocationPort {
     /**
      * 경유지 교체. removeWaypoint 뒤 바로 addWaypoint를 보내면 내비가 두 요청을 동시에 처리하다 경로를 다시 짜면서
      * 더한 경유지를 버린다(에뮬레이터 로그 2026-10-26: 교체 뒤 wayPoints=[]). 그래서 목적지와 바뀐 경유지 목록을
-     * requestRouteWithWaypoints 한 번으로 보낸다. 좌표가 없는(0,0) 다른 경유지는 다시 넣을 수 없어 뺀다. 경유지는 최대 2개.
+     * requestRouteWithWaypoints 한 번으로 보낸다. 다른 경유지의 좌표를 모르면 삭제하지 않고 변경을 거절한다.
      */
     override suspend fun replaceWaypoint(index: Int, target: RouteTarget): Result<Unit> = runCatching {
         val dest = checkNotNull(destination) { "목적지가 없음" }
-        val list = waypoints.toMutableList().apply { if (index in indices) set(index, target) else add(target) }
-            .filter { it === target || it.location.lat != 0.0 || it.location.lon != 0.0 }
-            .take(2)
+        val list = replacementWaypoints(waypoints, index, target)
         Log.d(TAG, "경유지 교체 요청: ${list.joinToString { it.name }} → ${dest.name}")
         navi.requestRouteWithWaypoints(RouteWithWaypointsRequest(routeInfo(dest), list.mapIndexed { i, w -> waypointInfo(w, i) }))
     }

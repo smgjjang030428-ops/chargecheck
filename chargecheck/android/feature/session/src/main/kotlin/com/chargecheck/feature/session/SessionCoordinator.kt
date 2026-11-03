@@ -58,7 +58,8 @@ data class ChargerPick(val eventId: String, val stationName: String, val charger
 
 /**
  * 잔량 변화 없이 충전소를 떠난 뒤 "충전이 안 됐나요?" 확인(Effect.ConfirmLater).
- * 출발 직후 주행 화면에 잠깐([visible]), 못 받으면 숨겼다가 다음 주차 때 한 번 더([askedAgain]) 묻는다.
+ * 차량 상태를 받는 실제 앱에서는 주행 중 숨겨 보관하고, 다음 주차 때 한 번만([askedAgain]) 묻는다.
+ * 주차 신호가 없는 시연은 기존처럼 즉시 표시한다.
  */
 data class FailConfirm(
     val event: ChargeEvent,
@@ -75,7 +76,7 @@ data class FailConfirm(
  * 상태는 [state]로 UI에 노출한다. (기획문서/차지체크_앱_구동_기획.md §5 끝)
  *
  * @param resolveStation 내비 목적지가 충전소인지 판별한다. 기획 §7 StationResolver가 생기기 전까지의 자리.
- * @param parked 주차(true)·주행(false). 주차→주행이면 [SessionInput.Departing]을 넣고, 못 받은 실패 확인을 다음 주차 때 다시 띄운다.
+ * @param parked 주차(true)·주행(false). 주차→주행이면 [SessionInput.Departing]을 넣고 실패 확인은 다음 주차 때 한 번만 띄운다.
  */
 class SessionCoordinator(
     private val machine: ChargeSessionMachine,
@@ -223,7 +224,10 @@ class SessionCoordinator(
 
     /** 실패 확인에 대한 답. yes = 충전이 안 됐음 → 미리 만든 FAIL 기록을 올린다. 아니면 아무것도 기록하지 않는다. */
     suspend fun answerConfirm(yes: Boolean) {
+        expireConfirm(clock.now())
         val c = _confirm.value ?: return
+        // 이전 알림이나 음성 응답이 늦게 들어와도, 주행 중 보류한 질문을 승인한 것으로 처리하지 않는다.
+        if (!c.visible || (parked != null && !parkedNow)) return
         _confirm.value = null
         if (!yes) {
             val id = c.event.stationId.value
@@ -344,8 +348,15 @@ class SessionCoordinator(
                 if (skip != null) {
                     log("확인 생략: ${effect.stationName} — $skip")
                 } else {
-                    _confirm.value = FailConfirm(effect.event, effect.stationName, clock.now())
-                    log("확인 요청: ${effect.stationName}에서 잔량 변화 없이 출발")
+                    val showNow = parked == null || parkedNow
+                    _confirm.value = FailConfirm(
+                        effect.event,
+                        effect.stationName,
+                        clock.now(),
+                        visible = showNow,
+                        askedAgain = parked != null && showNow,
+                    )
+                    log(if (showNow) "확인 요청: ${effect.stationName}에서 잔량 변화 없이 출발" else "확인 보류: ${effect.stationName} — 다음 주차 때 한 번 물음")
                 }
             }
             is Effect.Ask -> {
@@ -391,7 +402,7 @@ class SessionCoordinator(
         return r.isSuccess
     }
 
-    /** 주차 → 주행. 다음 주차 때 이미 한 번 더 물은 확인은 여기서 끝낸다(무응답은 기록하지 않음). */
+    /** 주차 → 주행. 안전한 주차 때 이미 한 번 물은 확인은 여기서 끝낸다(무응답은 기록하지 않음). */
     private suspend fun onDeparting() {
         if (_confirm.value?.askedAgain == true) {
             _confirm.value = null
@@ -422,16 +433,18 @@ class SessionCoordinator(
         dispatch(SessionInput.StoppedNearStation(station, clock.now(), cfg.portRadiusM))
     }
 
-    /** 주행 → 주차. 출발할 때 못 받은 확인을 한 번 더 띄운다. */
+    /** 주행 → 주차. 주행 중 보류한 확인을 안전한 주차 때 한 번만 띄운다. */
     private fun onParked() {
+        // 시간 Flow가 먼저 오지 않아도 오래된 질문을 다시 표시하지 않는다.
+        expireConfirm(clock.now())
         val c = _confirm.value ?: return
         if (!c.visible && !c.askedAgain) {
             _confirm.value = c.copy(visible = true, askedAgain = true)
-            log("다시 묻기: ${c.question}")
+            log("주차 후 확인: ${c.question}")
         }
     }
 
-    /** 주행 중 카드는 잠깐만 보이고, 너무 오래된 확인은 버린다. */
+    /** 오래된 확인을 버린다. 주차 신호 없는 시연에서만 기존 표시 시간을 사용한다. */
     private fun expireConfirm(now: Instant) {
         val c = _confirm.value ?: return
         val age = Duration.between(c.createdAt, now)
@@ -440,9 +453,9 @@ class SessionCoordinator(
                 _confirm.value = null
                 log("확인: 시간이 지나 기록하지 않음")
             }
-            c.visible && !c.askedAgain && age > cfg.confirmDrivingShow -> {
+            parked == null && c.visible && !c.askedAgain && age > cfg.confirmDrivingShow -> {
                 _confirm.value = c.copy(visible = false)
-                log("주행 중 확인 카드 숨김 → 다음 주차 때 다시 물음")
+                log("시연 확인 카드 숨김")
             }
         }
     }

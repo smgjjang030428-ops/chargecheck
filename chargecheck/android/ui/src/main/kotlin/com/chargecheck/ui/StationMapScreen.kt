@@ -1,11 +1,14 @@
 package com.chargecheck.ui
 
 import android.graphics.drawable.GradientDrawable
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
@@ -23,6 +26,9 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -68,6 +74,7 @@ data class MapStation(
     val chargers: List<ChargerStatus> = emptyList(),
     /** 경로 추천 충전소: 핀을 크게 그린다. */
     val highlight: Boolean = false,
+    val routeTarget: Boolean = false,
 )
 
 /**
@@ -85,10 +92,13 @@ data class OverviewUi(
     val area: String? = null,
     val evidence: String? = null,
     val pending: String? = null,
+    val routeName: String? = null,
+    val routeTitle: String? = null,
+    val routeEvidence: String? = null,
 )
 
 /**
- * real flavor 화면. 주차 중에는 왼쪽에 주변 충전소 지도(우리 판정 색 핀), 오른쪽에 세션 상태.
+ * real flavor 화면. 주차 중에는 현재 내비의 판단을 먼저, 주변 지도는 보조로 보여 준다.
  * 핀을 누르면 상세 카드 → [여기로 안내]로 기본 내비에 목적지를 넘긴다.
  * 지도 위 검색 상자로 목적지를 고르면 [plan](가는 길의 충전소)을 받아 경로선과 오른쪽 [RoutePanel]을 보여준다.
  * 이때 [stations]에는 경로 위 충전소가 들어오고, 상세 카드의 버튼은 [들렀다 가기](경유지 안내)가 된다.
@@ -137,71 +147,77 @@ fun StationMapScreen(
     overview: OverviewUi? = null,
 ) {
     if (!parked) {
-        DrivingScreen(state, warning, onWarningChoice, confirm, onConfirm, routeCard, onRouteCard)
+        DrivingScreen(state, warning, onWarningChoice, routeCard, onRouteCard)
         return
     }
     Box(Modifier.fillMaxSize().background(Bg).padding(24.dp)) {
-        Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
-            Box(Modifier.weight(1.5f).fillMaxHeight().clip(RoundedCornerShape(20.dp))) {
-                StationMap(stations, car, onSelect, plan)
-                MapLegend(Modifier.align(Alignment.BottomStart).padding(16.dp))
-                stations.firstOrNull { it.id == selectedId }?.let { s ->
-                    val label = if (plan != null) "들렀다 가기" else "여기로 안내"
-                    val report = if (plan == null && canReport(s.id)) onReportFail else null
-                    StationCard(Modifier.align(Alignment.BottomCenter).padding(16.dp), s, label, onNavigate, { onSelect(null) }, report)
+        Column(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+                Column(Modifier.weight(1f)) {
+                    Text("차지체크", color = TextMain, fontSize = 30.sp, lineHeight = 39.sp, fontWeight = FontWeight.Bold)
+                    Text("내비와 함께하는 충전소 확인", color = TextSub, fontSize = 18.sp)
                 }
-                SearchBox(Modifier.align(Alignment.TopStart).padding(16.dp), search, onQueryChange, onSearch, onPickPlace, onNaviSearch)
+                onSettings?.let { OutlinedButton(onClick = it, shape = RoundedCornerShape(12.dp)) { Text("설정", color = TextMain, fontSize = 20.sp) } }
             }
-            Column(Modifier.weight(1f).fillMaxHeight(), verticalArrangement = Arrangement.spacedBy(20.dp)) {
-                if (banner != null || onSettings != null) {
-                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Text(
-                            banner ?: "",
-                            color = TextMain,
-                            fontSize = 18.sp,
-                            modifier = Modifier.weight(1f).then(
-                                if (banner != null) Modifier.clip(RoundedCornerShape(12.dp)).background(Yellow.copy(alpha = 0.25f)).padding(12.dp) else Modifier,
-                            ),
-                        )
-                        onSettings?.let { OutlinedButton(onClick = it, shape = RoundedCornerShape(12.dp)) { Text("설정", color = TextMain, fontSize = 20.sp) } }
-                    }
-                }
-                if (plan != null) {
-                    RoutePanel(Modifier.weight(2f).fillMaxWidth(), plan, { onSelect(it) }, onRouteGo, onRouteClose)
-                    SessionPanel(Modifier.weight(1f).fillMaxWidth(), state, engineOn = true, toast = toast, uploads = uploads)
-                } else if (state is SessionState.Idle && overview != null) {
-                    OverviewPanel(Modifier.weight(1f).fillMaxWidth(), overview, toast)
-                    if (devTools) LogPanel(Modifier.weight(1f).fillMaxWidth(), log)
-                } else {
-                    SessionPanel(Modifier.weight(1f).fillMaxWidth(), state, engineOn = true, toast = toast, uploads = uploads)
-                    // 판단 기록은 개발·시연 확인용. release에는 보이지 않는다
-                    if (devTools) LogPanel(Modifier.weight(1f).fillMaxWidth(), log)
-                }
-                if (devTools) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        (listOf("도착 처리" to onDevArrive) + devExtra).forEach { (label, action) ->
-                            OutlinedButton(onClick = action, modifier = Modifier.weight(1f)) {
-                                Text(label, color = TextSub, fontSize = 14.sp, maxLines = 1)
+            banner?.let { Text(it, color = TextMain, fontSize = 19.sp, modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Panel).padding(14.dp)) }
+            BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+                val primary: @Composable (Modifier) -> Unit = { modifier ->
+                    Column(modifier, verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        when {
+                            warning != null -> WarningCard(Modifier.fillMaxWidth(), warning, onWarningChoice)
+                            plan != null -> RoutePanel(Modifier.weight(1f).fillMaxWidth(), plan, { onSelect(it) }, onRouteGo, onRouteClose)
+                            overview != null && (state is SessionState.Idle || state is SessionState.Approaching || state is SessionState.Ended) ->
+                                SituationOverviewPanel(Modifier.weight(1f).fillMaxWidth(), overview, stations.filter { it.verdict == Verdict.GREEN }, toast, onSelect)
+                            else -> SessionPanel(Modifier.weight(1f).fillMaxWidth(), state, engineOn = true, toast = toast, uploads = uploads)
+                        }
+                        if (devTools) {
+                            LogPanel(Modifier.height(150.dp).fillMaxWidth(), log)
+                            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                (listOf("도착 처리" to onDevArrive) + devExtra).forEach { (label, action) ->
+                                    OutlinedButton(onClick = action) { Text(label, color = TextSub, fontSize = 14.sp) }
+                                }
                             }
                         }
                     }
                 }
+                val mapPane: @Composable (Modifier) -> Unit = { modifier ->
+                    Box(modifier.clip(RoundedCornerShape(20.dp))) {
+                        StationMap(stations, car, selectedId, onSelect, plan)
+                        MapLegend(Modifier.align(Alignment.BottomStart).padding(12.dp))
+                        stations.firstOrNull { it.id == selectedId }?.let { s ->
+                            val label = if (plan != null) "들렀다 가기" else "여기로 안내"
+                            val report = if (plan == null && canReport(s.id)) onReportFail else null
+                            StationCard(Modifier.align(Alignment.BottomCenter).padding(12.dp), s, label, onNavigate, { onSelect(null) }, report)
+                        }
+                        SearchBox(Modifier.align(Alignment.TopStart).padding(12.dp), search, onQueryChange, onSearch, onPickPlace, onNaviSearch)
+                    }
+                }
+                if (maxWidth >= 900.dp) {
+                    Row(Modifier.fillMaxSize(), horizontalArrangement = Arrangement.spacedBy(20.dp)) {
+                        primary(Modifier.weight(1.15f).fillMaxHeight())
+                        mapPane(Modifier.weight(1f).fillMaxHeight())
+                    }
+                } else {
+                    Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                        primary(Modifier.fillMaxWidth().height(540.dp))
+                        mapPane(Modifier.fillMaxWidth().height(420.dp))
+                    }
+                }
             }
         }
-        if (warning != null) WarningCard(Modifier.align(Alignment.TopCenter).padding(top = 40.dp), warning, onWarningChoice)
-        if (question != null) {
+        if (warning == null && question != null) {
             AskSheet(Modifier.align(Alignment.BottomCenter), question, onAnswer)
-        } else if (confirm != null && confirm.visible) {
+        } else if (warning == null && confirm != null && confirm.visible) {
             // 출발할 때 못 받은 "충전이 안 됐나요?"를 주차하면 다시 묻는다
             AskSheet(Modifier.align(Alignment.BottomCenter), Effect.Ask(confirm.question, retro = true)) { onConfirm(it == VoiceIntent.YES) }
-        } else if (chargerPick != null) {
+        } else if (warning == null && chargerPick != null) {
             ChargerPickSheet(Modifier.align(Alignment.BottomCenter), chargerPick, onPickCharger)
         }
     }
 }
 
 @Composable
-private fun StationMap(stations: List<MapStation>, car: GeoPoint?, onSelect: (String?) -> Unit, plan: RoutePlan?) {
+private fun StationMap(stations: List<MapStation>, car: GeoPoint?, selectedId: String?, onSelect: (String?) -> Unit, plan: RoutePlan?) {
     val context = LocalContext.current
     val map = remember {
         // OSM 타일 서버 이용 정책: 앱을 구분할 수 있는 User-Agent 필수. 출시 전에는 상용 지도 타일로 교체한다.
@@ -212,67 +228,81 @@ private fun StationMap(stations: List<MapStation>, car: GeoPoint?, onSelect: (St
             controller.setZoom(16.0)
         }
     }
-    DisposableEffect(Unit) { onDispose { map.onDetach() } }
-    AndroidView(
-        factory = { map },
-        modifier = Modifier.fillMaxSize(),
-        update = { view ->
-            view.overlays.clear()
-            plan?.let { p ->
-                view.overlays += Polyline(view).apply {
-                    setPoints(p.path.map { OsmPoint(it.lat, it.lon) })
-                    outlinePaint.color = android.graphics.Color.rgb(40, 110, 230)
-                    outlinePaint.strokeWidth = 12f
+    val pins = remember(map) { StationPinLayer(map) }
+    var groupChoices by remember { mutableStateOf<List<MapStation>>(emptyList()) }
+    DisposableEffect(map) {
+        map.addMapListener(pins)
+        onDispose { pins.dispose(); map.onDetach() }
+    }
+    Box(Modifier.fillMaxSize()) {
+        AndroidView(
+            factory = { map },
+            modifier = Modifier.fillMaxSize(),
+            update = { view ->
+                view.overlays.clear()
+                plan?.let { p ->
+                    view.overlays += Polyline(view).apply {
+                        setPoints(p.path.map { OsmPoint(it.lat, it.lon) })
+                        outlinePaint.color = android.graphics.Color.rgb(40, 110, 230)
+                        outlinePaint.strokeWidth = 12f
+                    }
+                    view.overlays += Marker(view).apply {
+                        position = OsmPoint(p.destination.location.lat, p.destination.location.lon)
+                        icon = dot(view, android.graphics.Color.WHITE, MARKER_DP)
+                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                        title = p.destination.name
+                    }
                 }
-                view.overlays += Marker(view).apply {
-                    position = OsmPoint(p.destination.location.lat, p.destination.location.lon)
-                    icon = dot(view, android.graphics.Color.WHITE, MARKER_DP)
-                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                    title = p.destination.name
+                pins.update(stations, selectedId, onSelect) { groupChoices = it }
+                view.overlays += pins.overlay
+                car?.let {
+                    view.overlays += Marker(view).apply {
+                        position = OsmPoint(it.lat, it.lon)
+                        icon = dot(view, android.graphics.Color.rgb(40, 110, 230), MARKER_DP)
+                        setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+                        title = "내 차"
+                    }
                 }
-            }
-            stations.forEach { s ->
-                view.overlays += Marker(view).apply {
-                    position = OsmPoint(s.location.lat, s.location.lon)
-                    icon = dot(view, s.verdict.color().toArgb(), if (s.highlight) 48 else MARKER_DP)
-                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                    title = s.name
-                    setOnMarkerClickListener { _, _ -> onSelect(s.id); true }
+                if (plan != null) {
+                    // 경로가 새로 오면 출발~목적지가 다 보이게 한 번 맞춘다
+                    if (view.tag !== plan && plan.path.size >= 2) {
+                        val pts = (plan.path + listOfNotNull(car)).map { OsmPoint(it.lat, it.lon) }
+                        view.post { view.zoomToBoundingBox(BoundingBox.fromGeoPoints(pts).increaseByScale(1.15f), false, 60) }
+                        view.tag = plan
+                    }
+                    view.invalidate()
+                    return@AndroidView
                 }
-            }
-            car?.let {
-                view.overlays += Marker(view).apply {
-                    position = OsmPoint(it.lat, it.lon)
-                    icon = dot(view, android.graphics.Color.rgb(40, 110, 230), MARKER_DP)
-                    setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-                    title = "내 차"
-                }
-            }
-            if (plan != null) {
-                // 경로가 새로 오면 출발~목적지가 다 보이게 한 번 맞춘다
-                if (view.tag !== plan && plan.path.size >= 2) {
-                    val pts = (plan.path + listOfNotNull(car)).map { OsmPoint(it.lat, it.lon) }
-                    view.post { view.zoomToBoundingBox(BoundingBox.fromGeoPoints(pts).increaseByScale(1.15f), false, 60) }
-                    view.tag = plan
+                // 차가 충전소들 근처(3km)면 차를, 멀리 있으면 충전소들의 가운데를 보여준다
+                val middle = stations.takeIf { it.isNotEmpty() }
+                    ?.let { s -> GeoPoint(s.map { it.location.lat }.average(), s.map { it.location.lon }.average()) }
+                val center = if (car != null && (middle == null || car.distanceMetersTo(middle) < 3_000)) car else middle
+                // 처음 한 번, 그리고 보여줄 지역이 2km 넘게 바뀌었을 때만 옮긴다(운전자가 지도를 움직인 건 존중).
+                // 앱이 켜질 때 차 위치가 아직 없어 기본 지역을 보여줬다가, 위치가 오면 차 주변으로 옮겨 간다.
+                if (view.tag is RoutePlan) view.controller.setZoom(16.0) // 경로 보기를 닫으면 원래 확대로
+                val last = view.tag as? GeoPoint
+                if (center != null && (last == null || last.distanceMetersTo(center) > 2_000)) {
+                    view.controller.setCenter(OsmPoint(center.lat, center.lon))
+                    view.tag = center
                 }
                 view.invalidate()
-                return@AndroidView
+            },
+        )
+        if (groupChoices.isNotEmpty()) {
+            Column(Modifier.align(Alignment.Center).fillMaxWidth(0.9f).heightIn(max = 500.dp)
+                .clip(RoundedCornerShape(16.dp)).background(Panel).padding(20.dp)
+                .verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text("같은 위치의 충전소", color = TextMain, fontSize = 24.sp, lineHeight = 32.sp, fontWeight = FontWeight.Bold)
+                groupChoices.forEach { station ->
+                    Column(Modifier.fillMaxWidth().clickable { onSelect(station.id); groupChoices = emptyList() }.padding(vertical = 12.dp)) {
+                        Text(station.name, color = TextMain, fontSize = 22.sp, lineHeight = 29.sp)
+                        Text(station.reason, color = TextSub, fontSize = 18.sp)
+                    }
+                }
+                OutlinedButton(onClick = { groupChoices = emptyList() }) { Text("닫기", color = TextMain, fontSize = 20.sp) }
             }
-            // 차가 충전소들 근처(3km)면 차를, 멀리 있으면 충전소들의 가운데를 보여준다
-            val middle = stations.takeIf { it.isNotEmpty() }
-                ?.let { s -> GeoPoint(s.map { it.location.lat }.average(), s.map { it.location.lon }.average()) }
-            val center = if (car != null && (middle == null || car.distanceMetersTo(middle) < 3_000)) car else middle
-            // 처음 한 번, 그리고 보여줄 지역이 2km 넘게 바뀌었을 때만 옮긴다(운전자가 지도를 움직인 건 존중).
-            // 앱이 켜질 때 차 위치가 아직 없어 기본 지역을 보여줬다가, 위치가 오면 차 주변으로 옮겨 간다.
-            if (view.tag is RoutePlan) view.controller.setZoom(16.0) // 경로 보기를 닫으면 원래 확대로
-            val last = view.tag as? GeoPoint
-            if (center != null && (last == null || last.distanceMetersTo(center) > 2_000)) {
-                view.controller.setCenter(OsmPoint(center.lat, center.lon))
-                view.tag = center
-            }
-            view.invalidate()
-        },
-    )
+        }
+    }
 }
 
 /** 지도 표시는 36dp 이상(안드로이드 차량용 가이드, 기획 §9). */
@@ -288,49 +318,13 @@ private fun dot(view: android.view.View, color: Int, sizeDp: Int) = GradientDraw
 }
 
 @Composable
-private fun OverviewPanel(modifier: Modifier, o: OverviewUi, toast: String?) {
-    PanelBox(modifier) {
-        Text("차지체크는 충전할 때 차 배터리가 실제로 올랐는지로 충전소를 확인해요", color = TextSub, fontSize = 18.sp)
-        Spacer(Modifier.height(16.dp))
-        o.headline?.let {
-            Text(it, color = TextMain, fontSize = 20.sp, modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(10.dp)).background(Yellow.copy(alpha = 0.2f)).padding(12.dp))
-            Spacer(Modifier.height(16.dp))
-        }
-        o.route?.let {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(Modifier.width(18.dp).height(18.dp).clip(RoundedCornerShape(9.dp)).background((o.routeVerdict ?: Verdict.GRAY).color()))
-                Spacer(Modifier.width(12.dp))
-                Text(it, color = TextMain, fontSize = 24.sp, fontWeight = FontWeight.Bold)
-            }
-            Spacer(Modifier.height(20.dp))
-        }
-        o.area?.let {
-            Text(it, color = TextMain, fontSize = 20.sp)
-            Spacer(Modifier.height(8.dp))
-        }
-        o.evidence?.let {
-            Text(it, color = TextSub, fontSize = 18.sp)
-            Spacer(Modifier.height(8.dp))
-        }
-        Text("회색은 고장이 아니라 최근 실제 충전 확인 기록이 없다는 뜻이에요", color = TextSub, fontSize = 16.sp)
-        Spacer(Modifier.weight(1f))
-        if (toast != null) {
-            Text(toast, color = Green, fontSize = 20.sp)
-            Spacer(Modifier.height(8.dp))
-        }
-        o.pending?.let { Text(it, color = TextSub, fontSize = 18.sp) }
-        Text("충전소에 가면 충전 결과를 자동으로 기록해요", color = TextSub, fontSize = 16.sp)
-    }
-}
-
-@Composable
 private fun MapLegend(modifier: Modifier) {
-    Row(
+    FlowRow(
         modifier.clip(RoundedCornerShape(12.dp)).background(Panel).padding(horizontal = 14.dp, vertical = 10.dp),
         horizontalArrangement = Arrangement.spacedBy(14.dp),
-        verticalAlignment = Alignment.CenterVertically,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        listOf(Verdict.GREEN to "최근 정상", Verdict.YELLOW to "주의", Verdict.RED to "실패 많음", Verdict.GRAY to "확인 기록 없음").forEach { (v, label) ->
+        listOf(Verdict.GREEN to "최근 확인", Verdict.YELLOW to "주의", Verdict.RED to "주의 필요", Verdict.GRAY to "미확인").forEach { (v, label) ->
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Box(Modifier.width(14.dp).height(14.dp).clip(RoundedCornerShape(7.dp)).background(v.color()))
                 Spacer(Modifier.width(6.dp))
@@ -359,7 +353,7 @@ private fun StationCard(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.width(18.dp).height(18.dp).clip(RoundedCornerShape(9.dp)).background(s.verdict.color()))
             Spacer(Modifier.width(12.dp))
-            Text(s.name, color = TextMain, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+            Text(s.name, color = TextMain, fontSize = 28.sp, lineHeight = 36.sp, fontWeight = FontWeight.Bold)
         }
         Spacer(Modifier.height(6.dp))
         Text(s.reason, color = TextSub, fontSize = 20.sp)
@@ -380,7 +374,7 @@ private fun StationCard(
             if (usage.isNotEmpty()) InfoRow("이용", usage.joinToString(" · "))
         }
         Spacer(Modifier.height(16.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
                 onClick = { onNavigate(s.id) },
                 colors = ButtonDefaults.buttonColors(containerColor = TextMain, contentColor = Bg),
@@ -410,7 +404,7 @@ private fun InfoRow(label: String, value: String) {
 /** 충전기 한 대: "01번 · 급속 100kW · DC콤보 · 사용 가능 · 최근 실패 2건" */
 @Composable
 private fun ChargerLine(c: ChargerStatus) {
-    val failed = c.verdict == Verdict.RED || c.verdict == Verdict.YELLOW
+    val failed = c.recentFailCount > 0
     Row(Modifier.padding(start = 96.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.width(10.dp).height(10.dp).clip(RoundedCornerShape(5.dp)).background(c.verdict.color()))
         Spacer(Modifier.width(8.dp))

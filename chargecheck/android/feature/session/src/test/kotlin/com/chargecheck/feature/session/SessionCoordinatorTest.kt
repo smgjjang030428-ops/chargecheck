@@ -71,7 +71,7 @@ class SessionCoordinatorTest {
     }
 
     /** 새 앱 프로세스 하나. 저장소만 이어진다. */
-    private fun newCoordinator() = SessionCoordinator(
+    private fun newCoordinator(withParkedSignal: Boolean = true) = SessionCoordinator(
         machine = ChargeSessionMachine(DeviceId("test"), { "e${uploaded.size}" }),
         vehicle = object : VehiclePort {
             override fun soc() = soc
@@ -102,7 +102,7 @@ class SessionCoordinatorTest {
         },
         clock = object : ClockPort { override fun now(): Instant = now.value },
         resolveStation = { if (it.poiId == station.id.value) station else null },
-        parked = parked,
+        parked = if (withParkedSignal) parked else null,
         stationsNear = { known },
         snapshots = store,
     )
@@ -258,14 +258,17 @@ class SessionCoordinatorTest {
     }
 
     @Test
-    fun `출발할 때 확인 카드가 뜨고 안 됐다고 하면 FAIL과 충전기 번호 질문`() = runTest(UnconfinedTestDispatcher()) {
+    fun `출발할 때 숨겨 보관하고 다음 주차에서 확인하면 FAIL과 충전기 번호 질문`() = runTest(UnconfinedTestDispatcher()) {
         coordinator.start(backgroundScope, now)
         departWithoutCharge()
         val c = assertNotNull(coordinator.confirm.value)
-        assertEquals(true, c.visible)
+        assertEquals(false, c.visible)
+        assertEquals(false, c.askedAgain)
         assertEquals("아까 강남 급속충전소에서 충전이 안 됐나요?", c.question)
         assertEquals(emptyList(), uploaded)
 
+        parked.value = true
+        assertEquals(true, assertNotNull(coordinator.confirm.value).visible)
         coordinator.answerConfirm(yes = true)
         assertNull(coordinator.confirm.value)
         assertEquals(listOf(ChargeResult.FAIL to DetectMode.LIVE), uploaded.map { it.result to it.mode })
@@ -276,15 +279,17 @@ class SessionCoordinatorTest {
     fun `아니라고 하면 기록하지 않는다`() = runTest(UnconfinedTestDispatcher()) {
         coordinator.start(backgroundScope, now)
         departWithoutCharge()
+        parked.value = true
         coordinator.answerConfirm(yes = false)
         assertNull(coordinator.confirm.value)
         assertEquals(emptyList(), uploaded)
     }
 
     @Test
-    fun `주행 중 못 답하면 숨겼다가 다음 주차 때 한 번 더 묻는다`() = runTest(UnconfinedTestDispatcher()) {
+    fun `주행 중에는 처음부터 질문하지 않고 다음 주차 때 한 번만 묻는다`() = runTest(UnconfinedTestDispatcher()) {
         coordinator.start(backgroundScope, now)
         departWithoutCharge()
+        assertEquals(false, assertNotNull(coordinator.confirm.value).visible)
         now.value = at(3) + Duration.ofSeconds(50)
         assertEquals(false, assertNotNull(coordinator.confirm.value).visible)
 
@@ -293,6 +298,21 @@ class SessionCoordinatorTest {
         val again = assertNotNull(coordinator.confirm.value)
         assertEquals(true, again.visible && again.askedAgain)
 
+        coordinator.answerConfirm(yes = true)
+        assertEquals(1, uploaded.size)
+    }
+
+    @Test
+    fun `주행 중 보류한 확인은 늦게 온 응답으로 실패를 기록하지 않는다`() = runTest(UnconfinedTestDispatcher()) {
+        coordinator.start(backgroundScope, now)
+        departWithoutCharge()
+
+        coordinator.answerConfirm(yes = true)
+        coordinator.answerConfirm(yes = false)
+        assertEquals(emptyList(), uploaded)
+        assertEquals(false, assertNotNull(coordinator.confirm.value).visible)
+
+        parked.value = true
         coordinator.answerConfirm(yes = true)
         assertEquals(1, uploaded.size)
     }
@@ -314,6 +334,31 @@ class SessionCoordinatorTest {
         departWithoutCharge()
         now.value = at(3 + 121)
         assertNull(coordinator.confirm.value)
+    }
+
+    @Test
+    fun `만료 뒤 도착한 응답도 실패를 기록하지 않는다`() = runTest(UnconfinedTestDispatcher()) {
+        coordinator.start(backgroundScope, now)
+        departWithoutCharge()
+        parked.value = true
+        now.value = at(3 + 121)
+        coordinator.answerConfirm(yes = true)
+        assertNull(coordinator.confirm.value)
+        assertEquals(emptyList(), uploaded)
+    }
+
+    @Test
+    fun `주차 신호 없는 시연은 즉시 확인하고 응답하는 동작을 유지한다`() = runTest(UnconfinedTestDispatcher()) {
+        val demo = newCoordinator(withParkedSignal = false)
+        demo.start(backgroundScope, now)
+        arrivals.emit(target)
+        soc.emit(SocSample(42, t0))
+        now.value = at(3)
+        demo.dispatch(SessionInput.Departing(now.value))
+        assertEquals(true, assertNotNull(demo.confirm.value).visible)
+
+        demo.answerConfirm(yes = true)
+        assertEquals(listOf(ChargeResult.FAIL), uploaded.map { it.result })
     }
 
     @Test
@@ -392,7 +437,11 @@ class SessionCoordinatorTest {
             port.emit(true)
             now.value = at(10L * i + 3)
             parked.value = false
-            if (i < 2) coordinator.answerConfirm(yes = false) else assertNull(coordinator.confirm.value)
+            if (i < 2) {
+                parked.value = true
+                coordinator.answerConfirm(yes = false)
+                parked.value = false
+            } else assertNull(coordinator.confirm.value)
             now.value = at(10L * i + 8)
         }
     }

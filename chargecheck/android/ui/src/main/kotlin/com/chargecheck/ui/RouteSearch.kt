@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
@@ -67,7 +68,7 @@ internal fun SearchBox(
     onNaviSearch: (String) -> Unit = {},
 ) {
     val focus = LocalFocusManager.current
-    Column(modifier.width(560.dp)) {
+    Column(modifier.widthIn(max = 560.dp).fillMaxWidth()) {
         OutlinedTextField(
             value = search.query,
             onValueChange = onQueryChange,
@@ -139,7 +140,7 @@ internal fun RoutePanel(
     onClose: () -> Unit,
 ) {
     Column(modifier.clip(RoundedCornerShape(20.dp)).background(Panel).padding(22.dp)) {
-        Text("${plan.destination.name}까지 약 ${km(plan.routeKm)}", color = TextMain, fontSize = 26.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text("${plan.destination.name}까지 약 ${km(plan.routeKm)}", color = TextMain, fontSize = 26.sp, lineHeight = 34.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Spacer(Modifier.height(4.dp))
         val car = listOfNotNull(plan.rangeKm?.let { "남은 주행 ${km(it)}" }, plan.soc?.let { "배터리 $it%" })
         Text(car.joinToString(" · ").ifBlank { "차의 남은 주행 가능 거리를 못 읽었어요" }, color = TextSub, fontSize = 18.sp)

@@ -16,6 +16,8 @@ import com.chargecheck.core.port.RouteTarget
 import com.chargecheck.core.port.VoiceIntent
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.launch
@@ -42,6 +44,8 @@ class ArrivalWarningCoordinatorTest {
 
     /** 내비 경로(경유지들 + 목적지). 실제 내비처럼 교체 요청을 받으면 이 목록을 바꾼다. */
     private val targets = MutableStateFlow<List<RouteTarget>>(emptyList())
+    private val cancellations = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    private var naviEdits = 0
     private var statusCalls = 0
     /** 판정 조회를 이 횟수만큼 실패시킨다. */
     private var failStatus = 0
@@ -59,6 +63,7 @@ class ArrivalWarningCoordinatorTest {
     private fun route() = targets.value.map { it.poiId ?: it.name }
 
     private fun edit(change: (MutableList<RouteTarget>) -> Unit): Result<Unit> {
+        naviEdits++
         if (naviFails) return Result.failure(IllegalStateException("내비 거절"))
         if (!naviIgnores) targets.value = targets.value.toMutableList().also(change)
         return Result.success(Unit)
@@ -67,6 +72,7 @@ class ArrivalWarningCoordinatorTest {
     private val coordinator = ArrivalWarningCoordinator(
         navi = object : NaviPort {
             override fun routeTargets() = targets
+            override fun routeCancellations() = cancellations
             override fun arrivals() = emptyFlow<RouteTarget>()
             override suspend fun replaceWaypoint(index: Int, target: RouteTarget) = edit { it[index] = target }
             override suspend fun addWaypoint(target: RouteTarget) = edit { it.add(0, target) }
@@ -169,7 +175,8 @@ class ArrivalWarningCoordinatorTest {
         targets.value = listOf(cafe, cityHall) // 운전자가 내비에서 경로를 바꿈
         coordinator.choose(VoiceIntent.SWITCH)
         assertEquals(listOf("카페", "서울특별시청"), route())
-        assertTrue(coordinator.swapStatus.value!!.startsWith("경로를 확인하고 있어요"))
+        assertNull(coordinator.warning.value)
+        assertEquals(0, naviEdits)
     }
 
     @Test
@@ -195,6 +202,40 @@ class ArrivalWarningCoordinatorTest {
         coordinator.choose(VoiceIntent.SWITCH)
         assertEquals(listOf("R", "서울특별시청"), route())
         assertTrue(coordinator.swapStatus.value!!.startsWith("내비 경로가 바뀌었는지 확인하지 못했어요"))
+        assertNotNull(coordinator.warning.value)
+        naviIgnores = false
+        coordinator.choose(VoiceIntent.SWITCH)
+        assertEquals(listOf("G", "서울특별시청"), route())
+        assertEquals(2, naviEdits)
+    }
+
+    @Test
+    fun `확인 시간 초과 뒤 늦게 반영되면 다시 바꾸지 않는다`() = runTest(UnconfinedTestDispatcher()) {
+        coordinator.start(backgroundScope)
+        targets.value = listOf(red.target(), cityHall)
+        naviIgnores = true
+        coordinator.choose(VoiceIntent.SWITCH)
+        assertNotNull(coordinator.warning.value)
+        targets.value = listOf(green.target(), cityHall) // 첫 요청이 뒤늦게 반영됨
+        coordinator.choose(VoiceIntent.SWITCH)
+        assertNull(coordinator.warning.value)
+        assertEquals(listOf("G", "서울특별시청"), route())
+        assertEquals(1, naviEdits)
+    }
+
+    @Test
+    fun `반영을 기다리는 동안 다른 일반 목적지로 바꾸면 옛 경고를 복원하지 않는다`() = runTest(UnconfinedTestDispatcher()) {
+        coordinator.start(backgroundScope)
+        targets.value = listOf(red.target(), cityHall)
+        naviIgnores = true
+        backgroundScope.launch {
+            delay(1_000)
+            targets.value = listOf(cafe)
+        }
+        coordinator.choose(VoiceIntent.SWITCH)
+        assertNull(coordinator.warning.value)
+        assertNull(coordinator.routeCheck.value)
+        assertEquals(listOf("카페"), route())
     }
 
     @Test
@@ -243,6 +284,49 @@ class ArrivalWarningCoordinatorTest {
         advanceTimeBy(300_000)
         assertEquals(2, statusCalls) // A 재조회 없음
         assertNull(coordinator.warning.value)
+    }
+
+    @Test
+    fun `충전소 없는 새 경로로 바꾸면 이전 경고와 재시도를 정리한다`() = runTest(UnconfinedTestDispatcher()) {
+        coordinator.start(backgroundScope)
+        failStatus = 1
+        targets.value = listOf(red.target(), cityHall)
+        assertNotNull(coordinator.routeCheck.value)
+        targets.value = listOf(cityHall)
+        assertNull(coordinator.warning.value)
+        assertNull(coordinator.routeCheck.value)
+        advanceTimeBy(300_000)
+        assertEquals(1, statusCalls)
+        targets.value = listOf(red.target(), cityHall)
+        assertNotNull(coordinator.warning.value) // 같은 충전소로 다시 설정하면 새 검사
+        assertEquals(2, statusCalls)
+    }
+
+    @Test
+    fun `일반 목적지로 변경한 뒤 도착한 이전 빨강 응답은 버린다`() = runTest(UnconfinedTestDispatcher()) {
+        coordinator.start(backgroundScope)
+        val late = CompletableDeferred<Unit>()
+        holdStatus = late
+        targets.value = listOf(red.target(), cityHall)
+        targets.value = listOf(cityHall)
+        late.complete(Unit)
+        assertNull(coordinator.warning.value)
+        assertNull(coordinator.routeCheck.value)
+    }
+
+    @Test
+    fun `명시적인 안내 취소는 빈 경로 중에도 재시도와 경고를 정리한다`() = runTest(UnconfinedTestDispatcher()) {
+        coordinator.start(backgroundScope)
+        failStatus = 1
+        targets.value = listOf(red.target(), cityHall)
+        targets.value = emptyList()
+        cancellations.emit(Unit)
+        assertNull(coordinator.warning.value)
+        assertNull(coordinator.routeCheck.value)
+        advanceTimeBy(300_000)
+        assertEquals(1, statusCalls)
+        coordinator.recheck()
+        assertEquals(1, statusCalls) // 취소된 옛 경로를 설정 재활성화로 되살리지 않음
     }
 
     @Test
