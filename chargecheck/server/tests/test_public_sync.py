@@ -50,6 +50,23 @@ def test_상태_변경분은_아는_충전기에만_반영하고_옛_상태는_�
         assert s.get(Charger, ("ME000001", "02")).public_stat == "3"  # 그대로
 
 
+def test_상태가_바뀐_순간을_남기고_같은_충전기는_최신_것만_반영(seeded):
+    with seeded() as s:
+        public_sync.upsert_charger_info(s, [info_row("T9", "01", stat="4"), info_row("T9", "02", stat="2")])
+        changed = public_sync.apply_status(s, [
+            {"statId": "T9", "chgerId": "01", "stat": "2", "statUpdDt": "20261024130000"},  # 점검 → 사용 가능
+            {"statId": "T9", "chgerId": "02", "stat": "2", "statUpdDt": "20261024140000"},
+            {"statId": "T9", "chgerId": "02", "stat": "3", "statUpdDt": "20261024150000"},  # 같은 충전기, 더 최신
+            {"statId": "T9", "chgerId": "02", "stat": "2", "statUpdDt": "20261024130000"},  # 같은 충전기, 옛것
+        ])
+        assert changed == 2
+        s.expire_all()
+        fixed, busy = s.get(Charger, ("T9", "01")), s.get(Charger, ("T9", "02"))
+        assert fixed.public_stat == "2" and fixed.repaired_at is not None and fixed.last_charging_at is None
+        assert busy.public_stat == "3" and busy.last_charging_at is not None and busy.repaired_at is None
+        assert busy.last_charging_at.replace(tzinfo=None) == public_sync.parse_kst("20261024150000").replace(tzinfo=None)
+
+
 def test_삭제된_충전기는_지운다(seeded):
     with seeded() as s:
         public_sync.upsert_charger_info(s, [info_row("ME000001", "04", del_yn="Y")])

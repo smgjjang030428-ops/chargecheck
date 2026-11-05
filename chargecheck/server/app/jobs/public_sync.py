@@ -17,13 +17,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
-from sqlalchemy import case, delete, func, select, update
+from sqlalchemy import Column, DateTime, MetaData, String, Table, and_, case, delete, func, or_, select, update
 from sqlalchemy.orm import Session
 
-from app.config import SLOW_CHARGER_TYPES, settings
+from app.config import PUBLIC_STAT_MAP, SLOW_CHARGER_TYPES, settings
 from app.db import Base, SessionLocal, engine
 from app.models import Charger, Station
-from app.services.verdict import public_state
 
 log = logging.getLogger("public_sync")
 # httpx는 요청 URL을 INFO로 남기는데 URL에 serviceKey가 들어 있다. 키가 로그에 남지 않게 막는다.
@@ -195,29 +194,64 @@ def refresh_station_kinds(session: Session) -> None:
     session.execute(update(Station).values(charger_type=case((fast, "FAST"), else_="SLOW")))
 
 
+def _codes(state: str) -> list[str]:
+    return [code for code, s in PUBLIC_STAT_MAP.items() if s == state]
+
+
+# 상태 변경분을 잠시 담는 임시 테이블. 접속마다 따로 생기고 반영 뒤 지운다.
+_incoming = Table(
+    "incoming_status", MetaData(),
+    Column("stat_id", String), Column("chger_id", String), Column("stat", String),
+    Column("upd", DateTime(timezone=True)), Column("at", DateTime(timezone=True)),
+    prefixes=["TEMPORARY"],
+)
+
+
 def apply_status(session: Session, rows: list[dict]) -> int:
-    """getChargerStatus 변경분을 이미 아는 충전기에만 반영한다. 반환: 바뀐 충전기 수."""
-    changed = 0
+    """getChargerStatus 변경분을 이미 아는 충전기에만 반영한다. 반환: 반영한 충전기 수.
+
+    전국 변경분은 5분마다 1만 건이 넘는다. 충전기마다 조회하면 배포 DB(Neon 무료, 월 5GB 전송) 응답이
+    하루 수 GB가 돼 한도를 넘었다(2026-11-05). 그래서 변경분을 임시 테이블에 한꺼번에 넣고
+    UPDATE … FROM 한 번으로 반영한다. DB에서 앱 서버로 돌아오는 데이터가 거의 없다."""
+    now = datetime.now(timezone.utc)
+    latest: dict[tuple[str, str], dict] = {}
     for row in rows:
-        charger = session.get(Charger, (row.get("statId"), row.get("chgerId")))
-        if charger is None:
+        key = (row.get("statId"), row.get("chgerId"))
+        if not key[0] or not key[1]:
             continue
         upd = parse_kst(row.get("statUpdDt"))
-        prev = charger.stat_upd_dt if charger.stat_upd_dt is None or charger.stat_upd_dt.tzinfo else charger.stat_upd_dt.replace(tzinfo=timezone.utc)
-        if upd is not None and prev is not None and upd < prev:
-            continue  # 늦게 도착한 옛 상태는 무시
-        before = public_state(charger.public_stat)
-        charger.public_stat = str(row.get("stat", charger.public_stat))
-        charger.stat_upd_dt = upd or charger.stat_upd_dt
-        # 바뀐 순간을 남긴다: '충전 중'이 됨 = 누군가 실제로 충전, '점검 → 사용 가능' = 수리됐을 수 있음
-        at = upd or datetime.now(timezone.utc)
-        if charger.public_stat == "3" and before != "CHARGING":
-            charger.last_charging_at = at
-        if before == "OUT_OF_SERVICE" and public_state(charger.public_stat) in ("AVAILABLE", "CHARGING"):
-            charger.repaired_at = at
-        changed += 1
+        # 같은 충전기가 두 번 오면 최신 것만(UPDATE … FROM은 한 행에 한 번만 반영된다)
+        prev = latest.get(key)
+        if prev and prev["upd"] and (upd is None or upd < prev["upd"]):
+            continue
+        latest[key] = dict(stat_id=key[0], chger_id=key[1], stat=str(row.get("stat", "")), upd=upd, at=upd or now)
+    if not latest:
+        return 0
+
+    c, i = Charger.__table__.c, _incoming.c
+    conn = session.connection()
+    _incoming.drop(conn, checkfirst=True)
+    _incoming.create(conn)
+    for chunk in _chunks(list(latest.values()), 500):
+        conn.execute(_incoming.insert().values(chunk))  # 여러 행을 문장 하나로 보낸다
+    charging, out, usable = _codes("CHARGING"), _codes("OUT_OF_SERVICE"), _codes("AVAILABLE") + _codes("CHARGING")
+    stat = case((i.stat == "", c.public_stat), else_=i.stat)
+    result = conn.execute(
+        update(Charger.__table__)
+        .where(c.stat_id == i.stat_id, c.chger_id == i.chger_id)
+        # 늦게 도착한 옛 상태는 무시
+        .where(or_(i.upd.is_(None), c.stat_upd_dt.is_(None), i.upd >= c.stat_upd_dt))
+        .values(
+            public_stat=stat,
+            stat_upd_dt=func.coalesce(i.upd, c.stat_upd_dt),
+            # 바뀐 순간을 남긴다: '충전 중'이 됨 = 누군가 실제로 충전, '점검 → 사용 가능' = 수리됐을 수 있음
+            last_charging_at=case((and_(stat == "3", c.public_stat.not_in(charging)), i.at), else_=c.last_charging_at),
+            repaired_at=case((and_(c.public_stat.in_(out), stat.in_(usable)), i.at), else_=c.repaired_at),
+        )
+    )
+    _incoming.drop(conn)
     session.commit()
-    return changed
+    return result.rowcount
 
 
 def sync_info(session: Session, client: httpx.Client) -> tuple[int, int]:
