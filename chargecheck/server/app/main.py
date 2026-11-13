@@ -15,6 +15,8 @@ from app.routers import events, operators, places, reviews, stations
 from app.services import alerts
 
 log = logging.getLogger("chargecheck")
+# 앱 로그(동기화 건수·전송량 등)를 배포 로그에 남긴다. uvicorn 로그는 자체 설정을 쓴다.
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 
 
 def _sync_once(full: bool) -> None:
