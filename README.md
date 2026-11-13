@@ -4,6 +4,25 @@
 
 현대자동차그룹 차량용 앱 개발 공모전 출품작입니다. 팀명: **바다사람(BDSR)**
 
+## 심사위원 빠른 확인
+
+| 보고 싶은 것 | 바로가기 |
+| --- | --- |
+| 시연 영상 (2분 46초) | [`시연영상/ChargeCheck_시연영상.mp4`](시연영상/ChargeCheck_시연영상.mp4) · 장면 설명은 [`시연영상/README.md`](시연영상/README.md) |
+| release APK (서명됨) | [`apk/BDSR_ChargeCheck_release.apk`](apk/BDSR_ChargeCheck_release.apk) |
+| 배포 서버 동작 | [`/healthz`](https://chargecheck-ap2h.onrender.com/healthz) · [API 문서 `/docs`](https://chargecheck-ap2h.onrender.com/docs) · [부산 경성대 주변 충전소 판정 예시](https://chargecheck-ap2h.onrender.com/v1/stations/nearby?lat=35.1379&lon=129.1001&radius=1000) |
+| 설계 문서 | [`기획문서/차지체크_앱_구동_기획.md`](기획문서/차지체크_앱_구동_기획.md) |
+| 핵심 코드 | 충전 판단 [`feature/session`](chargecheck/android/feature/session) · 도착 전 경고 [`feature/warning`](chargecheck/android/feature/warning) · Pleos 연결 [`adapter/pleos`](chargecheck/android/adapter/pleos) · 서버 판정 [`server/app`](chargecheck/server/app) |
+
+**에뮬레이터에서 5분 안에 확인하기** (Pleos Connect 에뮬레이터, API 34)
+1. `adb install apk/BDSR_ChargeCheck_release.apk` → 앱 목록에서 **차지체크** 실행 → 처음 한 번 동의.
+   - 키·서버 설치 없이 배포 서버에 바로 연결돼요. 서버가 쉬고 있었다면 첫 화면이 뜨기까지 30~50초 걸릴 수 있어요.
+2. 첫 화면 지도에서 충전소 판정 색을 봅니다. 🟢 최근 충전 확인 · 🟡 주의 · 🔴 실패 많음 또는 운영사 '운영 중지' · ⚪ 기록 없음.
+3. **도착 전 경고:** 지도에서 🔴 충전소를 하나 골라 이름을 확인하고, Pleos 기본 내비에서 그 충전소를 목적지(또는 경유지)로 정합니다.
+   → 내비 위에 경고 카드가 뜨고, **[대안으로 바꾸기]**를 누르면 그 자리만 근처 대체 충전소로 바뀐 뒤 "바뀌었어요"가 표시됩니다.
+   - 🔴는 운영사 공공 데이터(전국, 5분마다 갱신)의 '운영 중지·점검' 신호로도 생겨요. 그래서 어느 충전소가 🔴인지는 그때그때 달라요.
+4. **충전 성공·실패 기록:** 차가 충전소에 머문 뒤 배터리 잔량(SOC) 변화로 판단해요. 영상 00:34~01:24에서 흐름을 볼 수 있고, 에뮬레이터에서 직접 재현하려면 아래 [에뮬레이터에서 상황 만들기](#설정)를 따라 Pleos Virtual Console로 SOC·기어를 바꿔 주세요.
+
 전기차가 충전소에 도착하면 앱은 구동 배터리 잔량(SOC)이 실제로 오르는지 지켜봅니다.
 - **SOC가 오르면:** "정상 충전"으로 자동 기록합니다.
 - **SOC가 오르지 않으면:** 정차 중 운전자에게 확인한 뒤 "충전 실패"로 기록합니다. 잔량 변화만으로 고장이라고 단정하지 않습니다.
@@ -31,7 +50,7 @@
 
 | 파일 | 위치 | 상태 |
 | --- | --- | --- |
-| release APK (서명됨) | [`apk/BDSR_ChargeCheck_release.apk`](apk/BDSR_ChargeCheck_release.apk) | ✅ 2026-11-03 경고 카드 버튼·대안 위치·내비 충전소 이름 짝짓기 수정 반영 · 에뮬레이터에서 내비 경고→목적지·경유지 교체까지 확인 |
+| release APK (서명됨) | [`apk/BDSR_ChargeCheck_release.apk`](apk/BDSR_ChargeCheck_release.apk) | ✅ 2026-11-03 빌드 · 에뮬레이터에서 내비 경고 → 목적지·경유지 교체까지 확인 · 이후 개선은 서버 쪽이라 APK는 그대로 |
 
 APK 용량이 GitHub 제한을 넘으면 [Releases](../../releases) 페이지에 올리고 이 표에 링크를 적습니다.
 
@@ -50,7 +69,7 @@ APK 용량이 GitHub 제한을 넘으면 [Releases](../../releases) 페이지에
 
 release APK는 배포 서버 **https://chargecheck-ap2h.onrender.com** 에 접속합니다. 별도 키·서버 설치 없이 바로 동작합니다.
 - 공공데이터 API 키는 서버에만 있고, 앱과 저장소에는 없습니다.
-- 서버는 Render(무료)에서 돌고, UptimeRobot이 5분마다 깨워 잠들지 않게 합니다. 그래도 첫 요청이 늦으면 30~50초 기다리면 됩니다.
+- 서버는 Render에서 돌고, UptimeRobot이 5분마다 깨워 잠들지 않게 합니다. 그래도 첫 요청이 늦으면 30~50초 기다리면 됩니다.
 - 서버 상태 확인: [`/healthz`](https://chargecheck-ap2h.onrender.com/healthz), API 목록: [`/docs`](https://chargecheck-ap2h.onrender.com/docs)
 
 ### 소스에서 빌드
@@ -127,7 +146,7 @@ copy .env.example .env      # PUBLIC_API_KEY에 본인 공공데이터 키를 �
    - **Motion > Gear Selection**: 기어 상태(주차 등)를 바꿉니다.
    - 도착 전 경고는 내비에서 고장 의심 충전소를 목적지나 경유지로 정하면 뜹니다.
 
-### 테스트 현황 (2026-11-02)
+### 테스트 현황 (2026-11-13)
 
 | 대상 | 결과 |
 | --- | --- |
@@ -136,9 +155,9 @@ copy .env.example .env      # PUBLIC_API_KEY에 본인 공공데이터 키를 �
 | 기록 전송 대기열 `RemoteApiAdapter` (서버 오류·연결 끊김·429·401·422 처리) | ✅ 9개 통과 |
 | 경유지 보존 `WaypointReplacement` | ✅ 5개 통과 |
 | 지도 핀 묶음 `MapPinGrouping` | ✅ 3개 통과 |
-| 서버 판정·API·공공 동기화·경로 (pytest) | ✅ 64개 통과 (직전 평가, 이번 서버 코드 변경 없음) |
-| 에뮬레이터 확인 | ✅ 상황카드 중심 첫 화면, 핀 묶음·선택·상세 카드(11/02). release + 배포 서버로 운영 중지 충전소 목적지 → 내비 위 경고 → [대안으로 바꾸기] → 목적지 교체·"바뀌었어요"(11/03, 시연영상 04 구간). realDebug + 로컬 시연 서버로 내비 충전소 목록의 충전소를 경유지로 넣으면 경고 → 경유지만 교체·목적지 유지(11/03, [2차 PT 시연 각본](시연영상_촬영자료_2026-11-03/03_촬영_대본/04_2차PT_에뮬레이터_시연각본.md)) |
-| 배포 서버 | ✅ 상태 확인, 주변 충전소 조회, 운영사 API 키 없이 차단(401) |
+| 서버 판정·API·공공 동기화·경로 (pytest) | ✅ 67개 통과 (11/13, GitHub에서 새로 받은 코드로 실행) |
+| 에뮬레이터 확인 | ✅ 상황카드 중심 첫 화면, 핀 묶음·선택·상세 카드(11/02). release + 배포 서버로 운영 중지 충전소 목적지 → 내비 위 경고 → [대안으로 바꾸기] → 목적지 교체·"바뀌었어요"(11/03, 시연영상 04 구간). realDebug + 로컬 시연 서버로 내비 충전소 목록의 충전소를 경유지로 넣으면 경고 → 경유지만 교체·목적지 유지(11/03) |
+| 배포 서버 | ✅ 상태 확인, 주변 충전소·판정·대체 충전소·장소 검색 응답(11/13), 운영사 API 키 없이 차단(401) |
 
 > ⚠️ 프로젝트 경로에 한글이 있으면 Windows에서 Gradle 테스트가 실행되지 않습니다. 영문 경로에 clone하세요.
 
@@ -150,7 +169,8 @@ copy .env.example .env      # PUBLIC_API_KEY에 본인 공공데이터 키를 �
 ├─ README.md                 ← 지금 보는 파일
 ├─ render.yaml               서버 배포 설정(Render)
 ├─ apk/                      release APK (제출용)
-├─ 시연영상/                  시연 장면 캡처와 촬영 순서
+├─ 시연영상/                  시연 영상(mp4)과 장면 캡처
+├─ 스크린샷/                  개발 과정에서 기능별로 찍은 화면(날짜순, 예전 화면 포함)
 ├─ chargecheck/android/      차량 앱 코드 (Kotlin, Jetpack Compose)
 │  ├─ app/                   진입점, flavor(real/demo) 조립
 │  ├─ ui/                    Compose 화면
