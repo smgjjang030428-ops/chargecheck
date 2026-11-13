@@ -109,3 +109,35 @@ def test_KST_시각을_UTC로_바꾼다():
     t = public_sync.parse_kst("20261024154523")
     assert t.isoformat() == "2026-10-24T06:45:23+00:00"
     assert public_sync.parse_kst("") is None
+
+
+def test_이미_보낸_상태는_다시_보내지_않고_새_변경만_보낸다(seeded, monkeypatch):
+    from datetime import datetime, timedelta
+    recent = (datetime.now(public_sync.KST) - timedelta(minutes=3)).strftime("%Y%m%d%H%M%S")
+    newer = (datetime.now(public_sync.KST) - timedelta(minutes=1)).strftime("%Y%m%d%H%M%S")
+    sent_rows = []
+    real_insert = public_sync._incoming.insert
+
+    class Spy:
+        def values(self, chunk):
+            sent_rows.extend(chunk)
+            return real_insert().values(chunk)
+    monkeypatch.setattr(public_sync._incoming, "insert", lambda: Spy())
+
+    row = {"statId": "ME000001", "chgerId": "01", "stat": "3", "statUpdDt": recent}
+    with seeded() as s:
+        assert public_sync.apply_status(s, [row]) == 1
+        assert len(sent_rows) == 1
+        # 조회 기간이 겹쳐 같은 변경이 또 오면 DB에 보내지 않는다
+        assert public_sync.apply_status(s, [row]) == 0
+        assert len(sent_rows) == 1
+        # 같은 충전기라도 상태가 새로 바뀌면 보낸다
+        assert public_sync.apply_status(s, [row | {"stat": "2", "statUpdDt": newer}]) == 1
+        assert len(sent_rows) == 2
+        assert s.get(Charger, ("ME000001", "01")).public_stat == "2"
+
+
+def test_오래된_기억은_지워_크기를_작게_유지한다(seeded):
+    with seeded() as s:
+        public_sync.apply_status(s, [{"statId": "ME000001", "chgerId": "01", "stat": "3", "statUpdDt": "20261024130000"}])
+    assert public_sync._sent == {}  # 한 시간보다 오래된 변경은 API에 다시 나오지 않으니 기억하지 않는다

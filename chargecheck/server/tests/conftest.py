@@ -39,3 +39,12 @@ def client(seeded, monkeypatch):
     with TestClient(app) as c:
         yield c
     app.dependency_overrides.clear()
+
+
+@pytest.fixture(autouse=True)
+def _clear_sent_status():
+    """apply_status가 기억하는 '이미 보낸 상태'가 테스트끼리 섞이지 않게 비운다."""
+    from app.jobs import public_sync
+    public_sync._sent.clear()
+    yield
+    public_sync._sent.clear()

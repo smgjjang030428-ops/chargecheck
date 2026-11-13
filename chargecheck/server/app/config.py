@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     # 기기 ID 해시용 솔트. 운영에서는 반드시 바꾼다.
     DEVICE_SALT: str = "dev-salt-change-me"
     SYNC_ENABLED: bool = True
-    STATUS_SYNC_MINUTES: int = 5
+    STATUS_SYNC_MINUTES: int = 10  # Render·Neon 무료 전송 한도(월 5GB)에 맞춘 간격
     # 운영사 고장 알림을 받을 주소(선택). 새 고장 의심이 생기면 JSON을 POST한다. 비우면 보내지 않는다.
     OPERATOR_WEBHOOK_URL: str = ""
     # 운영사 리포트 접근 키. 배포에서는 반드시 채운다. 비우면 누구나 볼 수 있다(로컬 개발용).

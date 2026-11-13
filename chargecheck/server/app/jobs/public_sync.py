@@ -207,12 +207,26 @@ _incoming = Table(
 )
 
 
+# 마지막으로 DB에 보낸 상태: (statId, chgerId) -> (stat, statUpdDt). 같은 변경을 다시 보내지 않으려고 둔다.
+# 변경분 조회 기간보다 오래된 항목은 API에 다시 나오지 않으니 지워서 크기를 작게 유지한다.
+_sent: dict[tuple[str, str], tuple[str, datetime | None]] = {}
+_sent_bytes_total = 0
+SENT_KEEP = timedelta(hours=1)
+
+
+def _row_bytes(r: dict) -> int:
+    """DB로 보내는 한 행의 대략적인 크기(값 + 문장·형식 부담)."""
+    return len(r["stat_id"]) + len(r["chger_id"]) + len(r["stat"]) + 2 * 32 + 40
+
+
 def apply_status(session: Session, rows: list[dict]) -> int:
     """getChargerStatus 변경분을 이미 아는 충전기에만 반영한다. 반환: 반영한 충전기 수.
 
-    전국 변경분은 5분마다 1만 건이 넘는다. 충전기마다 조회하면 배포 DB(Neon 무료, 월 5GB 전송) 응답이
+    전국 변경분은 10분 조회에 1만 건이 넘는다. 충전기마다 조회하면 배포 DB(Neon 무료, 월 5GB 전송) 응답이
     하루 수 GB가 돼 한도를 넘었다(2026-11-05). 그래서 변경분을 임시 테이블에 한꺼번에 넣고
-    UPDATE … FROM 한 번으로 반영한다. DB에서 앱 서버로 돌아오는 데이터가 거의 없다."""
+    UPDATE … FROM 한 번으로 반영한다. DB에서 앱 서버로 돌아오는 데이터가 거의 없다.
+    또 앱 서버가 DB로 보내는 양은 Render 무료 대역폭(월 5GB)에 잡혀 한도를 넘었다(2026-11-13).
+    그래서 이미 보낸 상태는 다시 보내지 않고, 보낸 건수·크기를 로그에 남긴다."""
     now = datetime.now(timezone.utc)
     latest: dict[tuple[str, str], dict] = {}
     for row in rows:
@@ -225,7 +239,11 @@ def apply_status(session: Session, rows: list[dict]) -> int:
         if prev and prev["upd"] and (upd is None or upd < prev["upd"]):
             continue
         latest[key] = dict(stat_id=key[0], chger_id=key[1], stat=str(row.get("stat", "")), upd=upd, at=upd or now)
+    received = len(latest)
+    # 지난번에 이미 보낸 것과 상태·시각이 같으면 건너뛴다(조회 기간이 겹쳐 같은 변경이 두 번 온다)
+    latest = {k: v for k, v in latest.items() if _sent.get(k) != (v["stat"], v["upd"])}
     if not latest:
+        log.info("상태 변경분 %d건 수신, 새로 보낼 것 없음", received)
         return 0
 
     c, i = Charger.__table__.c, _incoming.c
@@ -251,6 +269,17 @@ def apply_status(session: Session, rows: list[dict]) -> int:
     )
     _incoming.drop(conn)
     session.commit()
+
+    global _sent_bytes_total
+    sent_bytes = sum(_row_bytes(r) for r in latest.values())
+    _sent_bytes_total += sent_bytes
+    for k, v in latest.items():
+        _sent[k] = (v["stat"], v["upd"])
+    cutoff = now - SENT_KEEP
+    for k in [k for k, (_, upd) in _sent.items() if upd is None or upd < cutoff]:
+        del _sent[k]
+    log.info("상태 변경분 %d건 수신 → %d건 DB 전송(약 %.0fKB, 서버 시작 후 누적 약 %.1fMB), %d대 반영",
+             received, len(latest), sent_bytes / 1024, _sent_bytes_total / 1024 / 1024, result.rowcount)
     return result.rowcount
 
 
@@ -271,8 +300,10 @@ def sync_info(session: Session, client: httpx.Client) -> tuple[int, int]:
     return n_stations, n_chargers
 
 
-def sync_status(session: Session, client: httpx.Client, period_min: int = 10) -> int:
-    return apply_status(session, fetch_all(client, "getChargerStatus", {"period": period_min}))
+def sync_status(session: Session, client: httpx.Client, period_min: int | None = None) -> int:
+    """조회 기간은 동기화 간격보다 5분 길게 잡아 놓치는 변경이 없게 하고, 겹친 부분은 apply_status가 거른다."""
+    period = period_min or settings.STATUS_SYNC_MINUTES + 5
+    return apply_status(session, fetch_all(client, "getChargerStatus", {"period": period}))
 
 
 def main() -> None:
