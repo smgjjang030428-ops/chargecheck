@@ -1,23 +1,22 @@
 """목적지까지 가는 길에 들를 수 있는 충전소 찾기. 외부 지도·경로 서버를 쓰지 않는다.
 
 실제 길은 차의 내비가 짜므로, 여기서는 '어디쯤에서 충전하면 되는지'만 고른다.
-1. 출발지~목적지를 잇는 직선을 2km마다 찍고, 그 주변 띠(짧은 길 1.5km, 긴 길 3km) 안 충전소를 모은다.
+1. 출발지~목적지를 잇는 직선 주변 띠(짧은 길 1.5km, 긴 길 3km) 안 충전소를 모은다.
 2. 각 충전소를 직선에 투영해 '얼마나 가서 있는지'를 구하고, 도로 거리로 환산한다
    (내비가 알려 준 남은 거리 roadKm가 있으면 그 비율, 없으면 직선 × 1.3).
 3. 빨강(실패 많음)·버스전용·급속 없는 곳(fast_only)을 빼고, 5km 구간마다 가장 좋은 곳 하나만 남긴다.
 4. 남은 주행 가능 거리로 갈 수 있는지(15% 여유)와 도착 예상 배터리를 붙이고, 추천 지점을 고른다.
 """
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app.models import Station
 from app.schemas import AlongRouteOut, RouteStationOut
 from app.services.geo import bounding_box
-from app.services.route import cumulative, project, sample, straight
-from app.services.status import station_out, station_status, utcnow
+from app.services.route import cumulative, project, straight
+from app.services.status import station_out, station_statuses, utcnow
 
 RESERVE = 0.85          # 남은 거리의 85%까지만 믿는다
-SAMPLE_EVERY_M = 2_000
 BUCKET_KM = 5
 ROAD_FACTOR = 1.3       # 내비 거리를 모를 때 직선 → 도로 거리 어림
 VERDICT_RANK = {"GREEN": 0, "GRAY": 1, "YELLOW": 2, "RED": 3}
@@ -53,21 +52,30 @@ def along_route(
     factor = min(2.0, max(1.0, total_m / straight_m)) if straight_m > 0 else 1.0
     width = corridor_m(straight_m)
 
-    # 1. 띠 안 충전소 모으기
-    found: dict[str, Station] = {}
-    for p in sample(path, cum, SAMPLE_EVERY_M):
-        min_lat, max_lat, min_lon, max_lon = bounding_box(p[0], p[1], width)
-        for s in session.scalars(select(Station).where(Station.lat.between(min_lat, max_lat), Station.lon.between(min_lon, max_lon))):
-            found[s.stat_id] = s
+    # 1. 띠 안 충전소 모으기. 직선의 마디마다 사각형을 만들어 한 번에 묻는다(마디마다 따로 물으면 긴 길에서 느리다).
+    boxes = []
+    for a, b in zip(path, path[1:]):
+        a_box, b_box = bounding_box(a[0], a[1], width), bounding_box(b[0], b[1], width)
+        boxes.append(and_(
+            Station.lat.between(min(a_box[0], b_box[0]), max(a_box[1], b_box[1])),
+            Station.lon.between(min(a_box[2], b_box[2]), max(a_box[3], b_box[3])),
+        ))
+    query = select(Station).where(or_(*boxes))
+    if fast_only:
+        # 급속 충전기가 하나라도 있는 충전소만 FAST로 저장돼 있다(public_sync). 완속만 있는 곳은 여기서 미리 뺀다.
+        query = query.where(Station.charger_type == "FAST")
 
     # 2~3. 투영하고 거르기
-    now = utcnow()
-    by_bucket: dict[int, RouteStationOut] = {}
-    for s in found.values():
+    near = []
+    for s in session.scalars(query):
         on = project(path, cum, (s.lat, s.lon))
-        if on.detour_m > width:
-            continue
-        st = station_status(session, s.stat_id, now)
+        if on.detour_m <= width:
+            near.append((s, on))
+    now = utcnow()
+    statuses = station_statuses(session, [s.stat_id for s, _ in near], now)
+    by_bucket: dict[int, RouteStationOut] = {}
+    for s, on in near:
+        st = statuses[s.stat_id]
         usable = [c for c in st.chargers if c.public_state != "OUT_OF_SERVICE" and c.verdict != "RED"]
         if not usable or st.verdict == "RED":
             continue

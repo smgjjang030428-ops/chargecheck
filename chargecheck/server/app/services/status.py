@@ -60,12 +60,8 @@ def station_verdict(session: Session, stat_id: str, now: datetime) -> tuple[list
     return chargers, list(events), v
 
 
-def station_status(session: Session, stat_id: str, now: datetime | None = None) -> StationStatusOut:
-    now = now or utcnow()
-    chargers, _, v = station_verdict(session, stat_id, now)
+def _status_out(stat_id: str, chargers: list[Charger], v: StationVerdict, top_tags: list[str]) -> StationStatusOut:
     rows = {c.chger_id: c for c in chargers}
-    reviews = session.scalars(select(Review.tags).where(Review.stat_id == stat_id, Review.created_at >= now - timedelta(days=30))).all()
-    top_tags = [t for t, _ in Counter(tag for tags in reviews for tag in tags).most_common(3)]
     return StationStatusOut(
         station_id=stat_id,
         verdict=v.verdict,
@@ -92,3 +88,50 @@ def station_status(session: Session, stat_id: str, now: datetime | None = None) 
         top_tags=top_tags,
         notice=v.notice,
     )
+
+
+def _top_tags(tag_lists) -> list[str]:
+    return [t for t, _ in Counter(tag for tags in tag_lists for tag in tags).most_common(3)]
+
+
+def station_status(session: Session, stat_id: str, now: datetime | None = None) -> StationStatusOut:
+    now = now or utcnow()
+    chargers, _, v = station_verdict(session, stat_id, now)
+    reviews = session.scalars(select(Review.tags).where(Review.stat_id == stat_id, Review.created_at >= now - timedelta(days=30))).all()
+    return _status_out(stat_id, chargers, v, _top_tags(reviews))
+
+
+BATCH = 500  # IN 절 하나에 넣는 충전소 수
+
+
+def station_statuses(session: Session, stat_ids: list[str], now: datetime) -> dict[str, StationStatusOut]:
+    """충전소 여러 곳을 한꺼번에 판정한다. 결과는 station_status와 같다.
+
+    가는 길 충전소 찾기처럼 수백~수천 곳을 볼 때 충전소마다 DB를 세 번씩 다녀오면
+    배포 DB(원격)에서 1분 가까이 걸려 앱이 기다리지 못한다. 그래서 묶어서 읽는다.
+    """
+    chargers: dict[str, list[Charger]] = {i: [] for i in stat_ids}
+    events: dict[str, list[ChargeEvent]] = {i: [] for i in stat_ids}
+    tags: dict[str, list] = {i: [] for i in stat_ids}
+    for k in range(0, len(stat_ids), BATCH):
+        ids = stat_ids[k:k + BATCH]
+        for c in session.scalars(select(Charger).where(Charger.stat_id.in_(ids)).order_by(Charger.stat_id, Charger.chger_id)):
+            if c.chger_type not in BUS_ONLY_TYPES:
+                chargers[c.stat_id].append(c)
+        for e in session.scalars(select(ChargeEvent).where(
+            ChargeEvent.stat_id.in_(ids), ChargeEvent.occurred_at >= now - timedelta(hours=LOOKBACK_H),
+        )):
+            events[e.stat_id].append(e)
+        for sid, t in session.execute(select(Review.stat_id, Review.tags).where(
+            Review.stat_id.in_(ids), Review.created_at >= now - timedelta(days=30),
+        )):
+            tags[sid].append(t)
+    out = {}
+    for sid in stat_ids:
+        v = compute_verdict(
+            [ChargerIn(c.chger_id, c.chger_type, c.public_stat, _opt_utc(c.last_charging_at), _opt_utc(c.repaired_at)) for c in chargers[sid]],
+            [EventIn(e.device_hash, e.result, as_utc(e.occurred_at), e.chger_id, e.reason) for e in events[sid]],
+            now,
+        )
+        out[sid] = _status_out(sid, chargers[sid], v, _top_tags(tags[sid]))
+    return out
