@@ -222,7 +222,7 @@ def _row_bytes(r: dict) -> int:
 def apply_status(session: Session, rows: list[dict]) -> int:
     """getChargerStatus 변경분을 이미 아는 충전기에만 반영한다. 반환: 반영한 충전기 수.
 
-    전국 변경분은 10분 조회에 1만 건이 넘는다. 충전기마다 조회하면 배포 DB(Neon 무료, 월 5GB 전송) 응답이
+    전국 변경분은 5분마다 1만 건이 넘는다. 충전기마다 조회하면 배포 DB(Neon 무료, 월 5GB 전송) 응답이
     하루 수 GB가 돼 한도를 넘었다(2026-11-05). 그래서 변경분을 임시 테이블에 한꺼번에 넣고
     UPDATE … FROM 한 번으로 반영한다. DB에서 앱 서버로 돌아오는 데이터가 거의 없다.
     또 앱 서버가 DB로 보내는 양은 Render 무료 대역폭(월 5GB)에 잡혀 한도를 넘었다(2026-11-13).
